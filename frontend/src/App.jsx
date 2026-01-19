@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
-import { fetchErrors, fetchStats, fetchHealth, WebSocketManager } from './services/api';
+import { fetchErrors, fetchActiveErrors, fetchStats, fetchHealth, dismissError, dismissAllErrors, WebSocketManager } from './services/api';
 
 // ===== Components =====
 
@@ -59,7 +59,7 @@ function StatsGrid({ stats }) {
   );
 }
 
-function ErrorCard({ error, solution, isNew }) {
+function ErrorCard({ error, solution, isNew, onDismiss, showDismiss = true }) {
   const [expanded, setExpanded] = useState(false);
 
   const severityClass = error.severity === 'critical' ? 'critical' :
@@ -74,8 +74,17 @@ function ErrorCard({ error, solution, isNew }) {
             {error.device_id}
           </span>
         </div>
-        <div className="error-meta">
-          <span>{new Date(error.timestamp).toLocaleString()}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+          <span className="error-meta">{new Date(error.timestamp).toLocaleString()}</span>
+          {showDismiss && onDismiss && (
+            <button
+              className="btn btn-dismiss"
+              onClick={() => onDismiss(error.id)}
+              title="Dismiss error"
+            >
+              ✕
+            </button>
+          )}
         </div>
       </div>
 
@@ -121,7 +130,7 @@ function ErrorCard({ error, solution, isNew }) {
   );
 }
 
-function ErrorList({ errors, newErrorIds }) {
+function ErrorList({ errors, newErrorIds, onDismiss, showDismiss = true }) {
   if (errors.length === 0) {
     return (
       <div className="empty-state">
@@ -140,20 +149,29 @@ function ErrorList({ errors, newErrorIds }) {
           error={item.error}
           solution={item.solution}
           isNew={newErrorIds.has(item.error.id)}
+          onDismiss={onDismiss}
+          showDismiss={showDismiss}
         />
       ))}
     </div>
   );
 }
 
-function Dashboard({ errors, stats, newErrorIds }) {
+function Dashboard({ errors, stats, newErrorIds, onDismiss, onDismissAll }) {
   return (
     <div className="page">
       <div className="container">
-        <h1 style={{ marginBottom: 'var(--space-lg)' }}>Dashboard</h1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-lg)' }}>
+          <h1>Dashboard</h1>
+          {errors.length > 0 && (
+            <button className="btn btn-ghost" onClick={onDismissAll}>
+              Clear All Errors
+            </button>
+          )}
+        </div>
         <StatsGrid stats={stats} />
         <h2 style={{ marginBottom: 'var(--space-md)' }}>Recent Errors</h2>
-        <ErrorList errors={errors} newErrorIds={newErrorIds} />
+        <ErrorList errors={errors} newErrorIds={newErrorIds} onDismiss={onDismiss} showDismiss={true} />
       </div>
     </div>
   );
@@ -190,7 +208,10 @@ function History() {
     <div className="page">
       <div className="container">
         <h1 style={{ marginBottom: 'var(--space-lg)' }}>Error History</h1>
-        <ErrorList errors={errors} newErrorIds={new Set()} />
+        <p style={{ marginBottom: 'var(--space-md)', color: 'var(--color-text-muted)' }}>
+          All errors including dismissed ones are shown here.
+        </p>
+        <ErrorList errors={errors} newErrorIds={new Set()} showDismiss={false} />
         <div style={{ marginTop: 'var(--space-lg)', display: 'flex', gap: 'var(--space-md)', justifyContent: 'center' }}>
           <button className="btn btn-ghost" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
             Previous
@@ -256,6 +277,28 @@ function App() {
   const [stats, setStats] = useState({});
   const [newErrorIds, setNewErrorIds] = useState(new Set());
 
+  // Handle dismissing a single error
+  const handleDismiss = useCallback(async (errorId) => {
+    try {
+      await dismissError(errorId);
+      setErrors(prev => prev.filter(e => e.error.id !== errorId));
+      fetchStats().then(setStats).catch(console.error);
+    } catch (err) {
+      console.error('Failed to dismiss error:', err);
+    }
+  }, []);
+
+  // Handle dismissing all errors
+  const handleDismissAll = useCallback(async () => {
+    try {
+      await dismissAllErrors();
+      setErrors([]);
+      fetchStats().then(setStats).catch(console.error);
+    } catch (err) {
+      console.error('Failed to dismiss all errors:', err);
+    }
+  }, []);
+
   // Handle incoming WebSocket messages
   const handleMessage = useCallback((data) => {
     if (data.type === 'error_update') {
@@ -286,8 +329,8 @@ function App() {
     );
     ws.connect();
 
-    // Fetch initial data
-    fetchErrors(1, 20)
+    // Fetch initial data - use active errors for dashboard
+    fetchActiveErrors(1, 20)
       .then(data => setErrors(data.errors))
       .catch(console.error);
 
@@ -310,7 +353,15 @@ function App() {
     <BrowserRouter>
       <Header isConnected={isConnected} />
       <Routes>
-        <Route path="/" element={<Dashboard errors={errors} stats={stats} newErrorIds={newErrorIds} />} />
+        <Route path="/" element={
+          <Dashboard
+            errors={errors}
+            stats={stats}
+            newErrorIds={newErrorIds}
+            onDismiss={handleDismiss}
+            onDismissAll={handleDismissAll}
+          />
+        } />
         <Route path="/history" element={<History />} />
         <Route path="/settings" element={<Settings />} />
       </Routes>

@@ -38,6 +38,7 @@ class Database:
                 context TEXT NOT NULL,
                 severity TEXT NOT NULL,
                 pattern_matched TEXT,
+                dismissed INTEGER DEFAULT 0,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             
@@ -55,6 +56,12 @@ class Database:
             CREATE INDEX IF NOT EXISTS idx_errors_timestamp ON errors(timestamp);
             CREATE INDEX IF NOT EXISTS idx_solutions_error ON solutions(error_id);
         """)
+        # Add dismissed column if it doesn't exist (for existing databases)
+        try:
+            await self._connection.execute("ALTER TABLE errors ADD COLUMN dismissed INTEGER DEFAULT 0")
+            await self._connection.commit()
+        except Exception:
+            pass  # Column already exists
         await self._connection.commit()
     
     async def insert_error(self, error: DetectedError) -> int:
@@ -223,6 +230,109 @@ class Database:
         )
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
+    
+    async def get_errors_without_solutions(self) -> List[DetectedError]:
+        """Get all errors that don't have solutions yet."""
+        cursor = await self._connection.execute(
+            """
+            SELECT e.*
+            FROM errors e
+            LEFT JOIN solutions s ON e.id = s.error_id
+            WHERE s.id IS NULL
+            ORDER BY e.created_at DESC
+            """
+        )
+        rows = await cursor.fetchall()
+        
+        results = []
+        for row in rows:
+            error = DetectedError(
+                id=row["id"],
+                device_id=row["device_id"],
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                error_line=row["error_line"],
+                context=row["context"],
+                severity=Severity(row["severity"]),
+                pattern_matched=row["pattern_matched"] or "",
+                created_at=datetime.fromisoformat(row["created_at"])
+            )
+            results.append(error)
+        
+        return results
+    
+    async def dismiss_error(self, error_id: int) -> bool:
+        """Dismiss a single error from the dashboard."""
+        cursor = await self._connection.execute(
+            "UPDATE errors SET dismissed = 1 WHERE id = ?",
+            (error_id,)
+        )
+        await self._connection.commit()
+        return cursor.rowcount > 0
+    
+    async def dismiss_all_errors(self) -> int:
+        """Dismiss all errors from the dashboard."""
+        cursor = await self._connection.execute(
+            "UPDATE errors SET dismissed = 1 WHERE dismissed = 0"
+        )
+        await self._connection.commit()
+        return cursor.rowcount
+    
+    async def get_active_errors(
+        self, 
+        page: int = 1, 
+        per_page: int = 20
+    ) -> tuple[List[ErrorWithSolution], int]:
+        """Get paginated list of non-dismissed errors for dashboard."""
+        # Get total count of non-dismissed errors
+        count_cursor = await self._connection.execute(
+            "SELECT COUNT(*) FROM errors WHERE dismissed = 0"
+        )
+        total = (await count_cursor.fetchone())[0]
+        
+        # Get paginated results
+        offset = (page - 1) * per_page
+        cursor = await self._connection.execute(
+            """
+            SELECT e.*, s.id as sol_id, s.root_cause, s.impact, s.solution, s.prevention, s.created_at as sol_created_at
+            FROM errors e
+            LEFT JOIN solutions s ON e.id = s.error_id
+            WHERE e.dismissed = 0
+            ORDER BY e.created_at DESC
+            LIMIT ? OFFSET ?
+            """,
+            [per_page, offset]
+        )
+        
+        rows = await cursor.fetchall()
+        results = []
+        
+        for row in rows:
+            error = DetectedError(
+                id=row["id"],
+                device_id=row["device_id"],
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                error_line=row["error_line"],
+                context=row["context"],
+                severity=Severity(row["severity"]),
+                pattern_matched=row["pattern_matched"] or "",
+                created_at=datetime.fromisoformat(row["created_at"])
+            )
+            
+            solution = None
+            if row["sol_id"]:
+                solution = Solution(
+                    id=row["sol_id"],
+                    error_id=row["id"],
+                    root_cause=row["root_cause"],
+                    impact=row["impact"],
+                    solution=row["solution"],
+                    prevention=row["prevention"],
+                    created_at=datetime.fromisoformat(row["sol_created_at"])
+                )
+            
+            results.append(ErrorWithSolution(error=error, solution=solution))
+        
+        return results, total
 
 
 # Global database instance

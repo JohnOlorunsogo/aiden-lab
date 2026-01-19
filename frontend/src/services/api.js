@@ -19,6 +19,16 @@ export async function fetchErrors(page = 1, perPage = 20, deviceId = null, sever
 }
 
 /**
+ * Fetch active (non-dismissed) errors for dashboard
+ */
+export async function fetchActiveErrors(page = 1, perPage = 20) {
+    const params = new URLSearchParams({ page, per_page: perPage });
+    const response = await fetch(`${API_BASE}/api/errors/active?${params}`);
+    if (!response.ok) throw new Error('Failed to fetch active errors');
+    return response.json();
+}
+
+/**
  * Fetch a single error by ID
  */
 export async function fetchError(errorId) {
@@ -51,6 +61,28 @@ export async function fetchStats() {
 export async function fetchHealth() {
     const response = await fetch(`${API_BASE}/api/health`);
     if (!response.ok) throw new Error('Backend unavailable');
+    return response.json();
+}
+
+/**
+ * Dismiss a single error (marks as dismissed, still visible in history)
+ */
+export async function dismissError(errorId) {
+    const response = await fetch(`${API_BASE}/api/errors/${errorId}/dismiss`, {
+        method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to dismiss error');
+    return response.json();
+}
+
+/**
+ * Dismiss all errors (marks all as dismissed, still visible in history)
+ */
+export async function dismissAllErrors() {
+    const response = await fetch(`${API_BASE}/api/errors/dismiss-all`, {
+        method: 'POST'
+    });
+    if (!response.ok) throw new Error('Failed to dismiss errors');
     return response.json();
 }
 

@@ -1,12 +1,16 @@
-"""Gemini AI service for error analysis."""
-import google.generativeai as genai
+"""Gemini AI service for error analysis using the new google-genai SDK."""
+import logging
+from google import genai
+from google.genai import types
+from google.genai.errors import APIError, ClientError, ServerError
 from typing import Optional
 import asyncio
-from functools import partial
 
 from app.config import settings
 from app.models.error import DetectedError, Solution
 from app.templates.prompts import build_error_analysis_prompt
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiService:
@@ -14,7 +18,7 @@ class GeminiService:
     
     def __init__(self):
         self._configured = False
-        self._model = None
+        self._client = None
     
     def configure(self, api_key: Optional[str] = None):
         """Configure the Gemini API client."""
@@ -22,8 +26,7 @@ class GeminiService:
         if not key:
             raise ValueError("Gemini API key is required. Set GEMINI_API_KEY in .env")
         
-        genai.configure(api_key=key)
-        self._model = genai.GenerativeModel('gemini-pro')
+        self._client = genai.Client(api_key=key)
         self._configured = True
     
     async def analyze_error(
@@ -54,11 +57,11 @@ class GeminiService:
             command_history=command_history
         )
         
-        # Run synchronous Gemini call in thread pool
+        # Run Gemini call in thread pool (the new SDK is synchronous)
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(
             None, 
-            partial(self._generate_content, prompt)
+            lambda: self._generate_content(prompt)
         )
         
         # Parse the response
@@ -66,8 +69,25 @@ class GeminiService:
     
     def _generate_content(self, prompt: str) -> str:
         """Generate content using Gemini (sync call)."""
-        response = self._model.generate_content(prompt)
-        return response.text
+        try:
+            response = self._client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=prompt
+            )
+            logger.info("Gemini API call successful")
+            return response.text
+        except ClientError as e:
+            logger.error(f"Gemini Client Error: {e}")
+            raise
+        except ServerError as e:
+            logger.error(f"Gemini Server Error: {e}")
+            raise
+        except APIError as e:
+            logger.error(f"Gemini API Error: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected Gemini Error: {type(e).__name__}: {e}")
+            raise
     
     def _parse_response(self, response_text: str, error_id: int) -> Solution:
         """Parse Gemini response into a Solution object."""
