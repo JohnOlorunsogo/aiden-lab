@@ -2,6 +2,133 @@ import { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { fetchErrors, fetchActiveErrors, fetchStats, fetchHealth, dismissError, dismissAllErrors, WebSocketManager } from './services/api';
 
+// ===== Utility Components =====
+
+/**
+ * Formats AI response text with proper markdown-like rendering
+ */
+function FormattedContent({ text }) {
+  if (!text) return null;
+
+  // Process the text to handle code blocks and formatting
+  const formatText = (content) => {
+    const parts = [];
+    let remaining = content;
+    let key = 0;
+
+    // Handle code blocks first
+    const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = codeBlockRegex.exec(content)) !== null) {
+      // Add text before the code block
+      if (match.index > lastIndex) {
+        const beforeText = content.slice(lastIndex, match.index);
+        parts.push(...formatInlineText(beforeText, key));
+        key += 100;
+      }
+
+      // Add the code block
+      const language = match[1] || 'code';
+      const code = match[2].trim();
+      parts.push(
+        <pre key={`code-${key++}`} className="code-block">
+          <div className="code-header">{language.toUpperCase()}</div>
+          <code>{code}</code>
+        </pre>
+      );
+
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Add remaining text after the last code block
+    if (lastIndex < content.length) {
+      parts.push(...formatInlineText(content.slice(lastIndex), key));
+    }
+
+    return parts;
+  };
+
+  // Format inline text (bold, numbered lists, line breaks)
+  const formatInlineText = (text, startKey = 0) => {
+    let key = startKey;
+
+    // Split by line breaks and process each line
+    const lines = text.split('\n');
+    const elements = [];
+
+    lines.forEach((line, index) => {
+      const trimmedLine = line.trim();
+
+      if (!trimmedLine) {
+        // Empty line - add spacing
+        if (index > 0) {
+          elements.push(<br key={`br-${key++}`} />);
+        }
+        return;
+      }
+
+      // Check for numbered list items (1. or 2. etc)
+      const listMatch = trimmedLine.match(/^(\d+)\.\s+(.+)/);
+      if (listMatch) {
+        elements.push(
+          <div key={`list-${key++}`} className="list-item">
+            <span className="list-number">{listMatch[1]}.</span>
+            <span>{formatBoldText(listMatch[2])}</span>
+          </div>
+        );
+        return;
+      }
+
+      // Check for bullet points
+      if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
+        elements.push(
+          <div key={`bullet-${key++}`} className="list-item">
+            <span className="list-bullet">•</span>
+            <span>{formatBoldText(trimmedLine.slice(2))}</span>
+          </div>
+        );
+        return;
+      }
+
+      // Regular text line
+      elements.push(
+        <p key={`p-${key++}`} style={{ margin: '0.25rem 0' }}>
+          {formatBoldText(trimmedLine)}
+        </p>
+      );
+    });
+
+    return elements;
+  };
+
+  // Handle bold text (**text**)
+  const formatBoldText = (text) => {
+    const parts = [];
+    const boldRegex = /\*\*(.+?)\*\*/g;
+    let lastIndex = 0;
+    let match;
+    let key = 0;
+
+    while ((match = boldRegex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push(text.slice(lastIndex, match.index));
+      }
+      parts.push(<strong key={`bold-${key++}`}>{match[1]}</strong>);
+      lastIndex = match.index + match[0].length;
+    }
+
+    if (lastIndex < text.length) {
+      parts.push(text.slice(lastIndex));
+    }
+
+    return parts.length > 0 ? parts : text;
+  };
+
+  return <div className="formatted-content">{formatText(text)}</div>;
+}
+
 // ===== Components =====
 
 function Header({ isConnected }) {
@@ -94,21 +221,29 @@ function ErrorCard({ error, solution, isNew, onDismiss, showDismiss = true }) {
         <div className="solution">
           <div className="solution-section">
             <div className="solution-label">Root Cause</div>
-            <div className="solution-content">{solution.root_cause}</div>
+            <div className="solution-content">
+              <FormattedContent text={solution.root_cause} />
+            </div>
           </div>
           <div className="solution-section">
             <div className="solution-label">Solution</div>
-            <div className="solution-content">{solution.solution}</div>
+            <div className="solution-content">
+              <FormattedContent text={solution.solution} />
+            </div>
           </div>
           {expanded && (
             <>
               <div className="solution-section">
                 <div className="solution-label">Impact</div>
-                <div className="solution-content">{solution.impact}</div>
+                <div className="solution-content">
+                  <FormattedContent text={solution.impact} />
+                </div>
               </div>
               <div className="solution-section">
                 <div className="solution-label">Prevention</div>
-                <div className="solution-content">{solution.prevention}</div>
+                <div className="solution-content">
+                  <FormattedContent text={solution.prevention} />
+                </div>
               </div>
             </>
           )}

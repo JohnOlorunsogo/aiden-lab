@@ -373,6 +373,67 @@ a:hover {
   color: var(--color-accent);
 }
 
+/* Formatted Content */
+.formatted-content {
+  line-height: 1.6;
+}
+
+.formatted-content p {
+  margin: 0.25rem 0;
+}
+
+.formatted-content strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.code-block {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  margin: var(--space-sm) 0;
+  overflow-x: auto;
+}
+
+.code-header {
+  background: var(--color-bg-hover);
+  padding: var(--space-xs) var(--space-sm);
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  font-family: var(--font-mono);
+}
+
+.code-block code {
+  display: block;
+  padding: var(--space-sm) var(--space-md);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  background: transparent;
+  color: var(--color-text-primary);
+}
+
+.list-item {
+  display: flex;
+  gap: var(--space-sm);
+  margin: var(--space-xs) 0;
+  padding-left: var(--space-xs);
+}
+
+.list-number {
+  color: var(--color-accent);
+  font-weight: 600;
+  min-width: 1.5rem;
+}
+
+.list-bullet {
+  color: var(--color-accent);
+  min-width: 1rem;
+}
+
 /* Stats Cards */
 .stats-grid {
   display: grid;
