@@ -49,6 +49,7 @@ async def lifespan(app: FastAPI):
     # Start file watcher
     log_watcher.start()
     logger.info(f"Watching directory: {settings.log_watch_dir}")
+    logger.info(f"Absolute path: {settings.log_watch_dir.resolve()}")
     
     yield
     

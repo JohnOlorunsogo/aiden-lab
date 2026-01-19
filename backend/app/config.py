@@ -1,9 +1,14 @@
 """Configuration management using Pydantic settings."""
 import re
+import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 from typing import List
+
+
+# Determine project root (parent of backend directory)
+PROJECT_ROOT = Path(__file__).parent.parent.parent.parent  # backend/app/config.py -> project root
 
 
 class Settings(BaseSettings):
@@ -65,6 +70,27 @@ class Settings(BaseSettings):
         description="Regex pattern to parse log lines"
     )
     
+    @field_validator('log_watch_dir', mode='before')
+    @classmethod
+    def resolve_log_path(cls, v):
+        """Resolve log_watch_dir path - handles both relative and absolute paths."""
+        if v is None:
+            v = "./data/logs"
+        
+        path = Path(v)
+        
+        # If it's an absolute path, use it directly
+        if path.is_absolute():
+            return path
+        
+        # For relative paths, resolve from:
+        # 1. First check if it exists relative to CWD
+        if (Path.cwd() / path).exists():
+            return Path.cwd() / path
+        
+        # 2. Otherwise resolve from project root
+        return PROJECT_ROOT / path
+    
     class Config:
         env_file = ["../.env", ".env"]  # Look in parent dir first, then current
         env_file_encoding = "utf-8"
@@ -73,7 +99,11 @@ class Settings(BaseSettings):
     def get_db_path(self) -> Path:
         """Extract SQLite database path from URL."""
         if self.database_url.startswith("sqlite:///"):
-            return Path(self.database_url.replace("sqlite:///", ""))
+            db_path = self.database_url.replace("sqlite:///", "")
+            path = Path(db_path)
+            if not path.is_absolute():
+                return Path.cwd() / path
+            return path
         return Path("./data/aiden.db")
 
 
@@ -83,3 +113,4 @@ settings = Settings()
 # Ensure directories exist
 settings.log_watch_dir.mkdir(parents=True, exist_ok=True)
 settings.get_db_path().parent.mkdir(parents=True, exist_ok=True)
+
