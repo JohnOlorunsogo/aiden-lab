@@ -1,15 +1,20 @@
 """File watcher service using watchdog for real-time log monitoring."""
 import asyncio
+import platform
 from pathlib import Path
 from typing import Callable, Dict, Optional, List
 from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+from watchdog.observers.polling import PollingObserver
+from watchdog.events import FileSystemEventHandler, FileModifiedEvent, FileCreatedEvent
 import threading
 import logging
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Use polling on Windows for better reliability
+IS_WINDOWS = platform.system() == 'Windows'
 
 
 class LogFileHandler(FileSystemEventHandler):
@@ -26,6 +31,17 @@ class LogFileHandler(FileSystemEventHandler):
         self._callback = callback
         self._file_positions: Dict[str, int] = {}
         self._lock = threading.Lock()
+    
+    def on_created(self, event):
+        """Handle file creation events (important for Windows)."""
+        if not event.is_directory:
+            file_path = event.src_path
+            if self._is_log_file(file_path):
+                logger.info(f"New log file detected: {file_path}")
+                # Read entire content of new file
+                new_content = self._read_new_content(file_path)
+                if new_content:
+                    self._callback(file_path, new_content)
     
     def on_modified(self, event):
         """Handle file modification events."""
@@ -148,9 +164,17 @@ class LogWatcher:
         # Ensure directory exists
         self.watch_dir.mkdir(parents=True, exist_ok=True)
         
-        # Create handler and observer
+        # Create handler
         self._handler = LogFileHandler(self._dispatch_callbacks)
-        self._observer = Observer()
+        
+        # Use PollingObserver on Windows for better reliability
+        # Native Windows filesystem events can miss some changes
+        if IS_WINDOWS:
+            self._observer = PollingObserver(timeout=1)
+            logger.info("Using PollingObserver for Windows compatibility")
+        else:
+            self._observer = Observer()
+        
         self._observer.schedule(self._handler, str(self.watch_dir), recursive=False)
         
         # Try to get current event loop for async callbacks
@@ -161,6 +185,9 @@ class LogWatcher:
         
         self._observer.start()
         logger.info(f"Started watching directory: {self.watch_dir}")
+        
+        # Scan existing files on startup
+        self._scan_existing_files()
     
     def stop(self):
         """Stop watching the log directory."""
@@ -170,6 +197,20 @@ class LogWatcher:
             self._observer = None
             self._handler = None
             logger.info("Stopped watching directory")
+    
+    def _scan_existing_files(self):
+        """Scan and process existing files in the watch directory on startup."""
+        try:
+            logger.info(f"Scanning existing files in {self.watch_dir}")
+            for file_path in self.watch_dir.iterdir():
+                if file_path.is_file() and self._handler._is_log_file(str(file_path)):
+                    logger.info(f"Found existing log file: {file_path}")
+                    # Read entire content of existing files
+                    content = self._handler._read_new_content(str(file_path))
+                    if content:
+                        self._dispatch_callbacks(str(file_path), content)
+        except Exception as e:
+            logger.error(f"Error scanning existing files: {e}")
     
     def get_watched_files(self) -> List[str]:
         """Get list of files being tracked."""
