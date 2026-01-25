@@ -9,10 +9,10 @@ from app.api.routes import router as api_router
 from app.api.websocket import websocket_endpoint, ws_manager
 from app.services.database import db
 from app.services.gemini import gemini_service
+from app.services.ensp_logger_service import ensp_logger_service
 from app.core.watcher import log_watcher
 from app.core.analyzer import error_analyzer
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -22,15 +22,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan handler for startup/shutdown."""
-    # Startup
     logger.info("Starting AIDEN Labs...")
     
-    # Initialize database
     await db.connect()
     logger.info("Database connected")
     
-    # Configure Gemini (if API key available)
     if settings.gemini_api_key:
         try:
             gemini_service.configure()
@@ -40,27 +36,42 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("GEMINI_API_KEY not set - AI analysis disabled")
     
-    # Register analyzer's broadcast to WebSocket manager
     error_analyzer.register_broadcast(ws_manager.broadcast_error)
-    
-    # Register analyzer as callback for watcher
     log_watcher.register_async_callback(error_analyzer.process_new_content)
     
-    # Start file watcher
+    if settings.ensp_logger_enabled:
+        try:
+            ensp_logger_service.start()
+            if ensp_logger_service.is_running:
+                logger.info("ENSP logger service started")
+            else:
+                logger.warning("ENSP logger service failed to start (may require admin privileges)")
+        except Exception as e:
+            logger.warning(f"Failed to start ENSP logger service: {e}")
+            logger.warning("Continuing without packet capture - log monitoring will work with existing logs")
+    else:
+        logger.info("ENSP logger service is disabled")
+    
     log_watcher.start()
     logger.info(f"Watching directory: {settings.log_watch_dir}")
     logger.info(f"Absolute path: {settings.log_watch_dir.resolve()}")
     
     yield
     
-    # Shutdown
     logger.info("Shutting down AIDEN Labs...")
+    
+    if ensp_logger_service.is_running:
+        ensp_logger_service.stop()
+    
     log_watcher.stop()
+    
+    logger.info("Cleaning up log files...")
+    ensp_logger_service.cleanup_logs()
+    
     await db.close()
     logger.info("Shutdown complete")
 
 
-# Create FastAPI app
 app = FastAPI(
     title="AIDEN Labs",
     description="Log Monitoring & AI Error Analysis System for Huawei ENSP",
@@ -68,25 +79,20 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict this
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Include API routes
 app.include_router(api_router)
-
-# WebSocket endpoint
 app.websocket("/ws")(websocket_endpoint)
 
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
     return {
         "name": "AIDEN Labs",
         "description": "Log Monitoring & AI Error Analysis System",

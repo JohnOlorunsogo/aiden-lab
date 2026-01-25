@@ -1,39 +1,61 @@
 """Configuration management using Pydantic settings."""
-import re
 import os
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 from typing import List
 
-
-# Determine project root (parent of backend directory)
-PROJECT_ROOT = Path(__file__).parent.parent.parent.parent  # backend/app/config.py -> project root
+try:
+    _config_file = os.path.abspath(__file__)
+    _config_dir = os.path.dirname(_config_file)
+    _backend_dir = os.path.dirname(_config_dir)
+    BACKEND_ROOT = Path(_backend_dir)
+except Exception:
+    BACKEND_ROOT = Path.cwd()
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # API Keys
     gemini_api_key: str = Field(default="", description="Google Gemini API key")
     
-    # Paths
     log_watch_dir: Path = Field(
-        default=Path("./data/logs"),
+        default="data/logs",
         description="Directory containing device log files"
     )
     database_url: str = Field(
         default="sqlite:///./data/aiden.db",
         description="Database connection URL"
     )
+    ensp_mode: str = Field(
+        default="standard",
+        description="ENSP logger mode: standard, extended, lab, or custom"
+    )
+    ensp_console_port_range: str = Field(
+        default="2000-2004",
+        description="Console port range for eNSP (e.g., '2000-2004' or '2000,2001,2002')"
+    )
+    ensp_auto_detect: bool = Field(
+        default=True,
+        description="Auto-detect active console ports"
+    )
+    ensp_loopback_iface: str = Field(
+        default="Npcap Loopback Adapter",
+        description="Network interface name for loopback packet capture"
+    )
+    ensp_sniffer_log_dir: str = Field(
+        default="",
+        description="Custom log directory for ENSP sniffer (empty = use log_watch_dir for unified build)"
+    )
+    ensp_logger_enabled: bool = Field(
+        default=True,
+        description="Enable/disable ENSP packet sniffer"
+    )
     
-    # Processing
     context_lines: int = Field(
         default=30,
         description="Number of context lines to extract around errors"
     )
-    
-    # Error patterns (Huawei VRP specific)
     error_patterns_critical: List[str] = Field(
         default=[
             r"Error:\s*",
@@ -60,11 +82,8 @@ class Settings(BaseSettings):
         description="Regex patterns for warnings"
     )
     
-    # Server
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8000, description="Server port")
-    
-    # Log file format regex
     log_line_pattern: str = Field(
         default=r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+([←→])\s+'(.+)'",
         description="Regex pattern to parse log lines"
@@ -73,44 +92,70 @@ class Settings(BaseSettings):
     @field_validator('log_watch_dir', mode='before')
     @classmethod
     def resolve_log_path(cls, v):
-        """Resolve log_watch_dir path - handles both relative and absolute paths."""
         if v is None:
-            v = "./data/logs"
+            v = "data/logs"
         
-        path = Path(v)
+        if isinstance(v, Path):
+            path = v
+        else:
+            path_str = str(v).strip()
+            if path_str.startswith('./'):
+                path_str = path_str[2:]
+            path = Path(path_str)
         
-        # If it's an absolute path, use it directly
         if path.is_absolute():
             return path
         
-        # For relative paths, resolve from:
-        # 1. First check if it exists relative to CWD
-        if (Path.cwd() / path).exists():
-            return Path.cwd() / path
-        
-        # 2. Otherwise resolve from project root
-        return PROJECT_ROOT / path
+        if BACKEND_ROOT.is_absolute():
+            return BACKEND_ROOT / path
+        else:
+            return Path.cwd() / BACKEND_ROOT / path
     
     class Config:
-        env_file = ["../.env", ".env"]  # Look in parent dir first, then current
+        env_file = ["../.env", ".env"]
         env_file_encoding = "utf-8"
         extra = "ignore"
     
     def get_db_path(self) -> Path:
-        """Extract SQLite database path from URL."""
         if self.database_url.startswith("sqlite:///"):
             db_path = self.database_url.replace("sqlite:///", "")
             path = Path(db_path)
             if not path.is_absolute():
-                return Path.cwd() / path
+                path_str = str(path)
+                if path_str.startswith('./'):
+                    path_str = path_str[2:]
+                return BACKEND_ROOT / path_str
             return path
-        return Path("./data/aiden.db")
+        return BACKEND_ROOT / "data" / "aiden.db"
 
 
-# Global settings instance
 settings = Settings()
 
-# Ensure directories exist
 settings.log_watch_dir.mkdir(parents=True, exist_ok=True)
 settings.get_db_path().parent.mkdir(parents=True, exist_ok=True)
 
+MODE_CONFIGS = {
+    "standard": {
+        "port_range": "2000-2004",
+        "auto_detect": True,
+    },
+    "extended": {
+        "port_range": "2000-2010",
+        "auto_detect": True,
+    },
+    "lab": {
+        "port_range": "2000-2020",
+        "auto_detect": True,
+    },
+    "custom": {
+        "port_range": "2000-2004",
+        "auto_detect": False,
+    }
+}
+
+if settings.ensp_mode in MODE_CONFIGS:
+    mode_config = MODE_CONFIGS[settings.ensp_mode]
+    if settings.ensp_console_port_range == "2000-2004" and settings.ensp_mode != "standard":
+        settings.ensp_console_port_range = mode_config["port_range"]
+    if settings.ensp_auto_detect == True and settings.ensp_mode == "custom":
+        settings.ensp_auto_detect = mode_config["auto_detect"]
