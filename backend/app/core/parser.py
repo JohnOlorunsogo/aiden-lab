@@ -1,16 +1,29 @@
 """Log line parser for Huawei ENSP telnet session logs."""
 import re
+import logging
 from datetime import datetime
 from typing import Optional, List
 from app.models.error import LogLine
 
+logger = logging.getLogger(__name__)
+
 
 class LogParser:
-    """Parser for Huawei ENSP telnet log format."""
+    """Parser for Huawei ENSP telnet log format with flexible fallback."""
     
     # Pattern: [2026-01-18 03:10:25] [device_2000] ← 'content\r'
     LOG_LINE_PATTERN = re.compile(
         r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+([←→])\s+'(.*)'"
+    )
+    
+    # Simplified pattern: [timestamp] [device] content (without direction/quotes)
+    SIMPLE_PATTERN = re.compile(
+        r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+(.*)"
+    )
+    
+    # Generic timestamp pattern for any log format
+    GENERIC_TIMESTAMP = re.compile(
+        r"(\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2})"
     )
     
     # ANSI escape sequences and control characters
@@ -20,25 +33,81 @@ class LogParser:
     @classmethod
     def parse_line(cls, raw: str) -> Optional[LogLine]:
         """
-        Parse a single log line.
+        Parse a single log line with flexible format support.
         
         Args:
             raw: Raw log line string
             
         Returns:
-            LogLine object or None if line doesn't match format
+            LogLine object or None if line is empty/invalid
         """
-        match = cls.LOG_LINE_PATTERN.match(raw.strip())
-        if not match:
+        stripped = raw.strip()
+        if not stripped:
             return None
         
-        timestamp_str, device_id, direction, content = match.groups()
+        # Try standard format first
+        match = cls.LOG_LINE_PATTERN.match(stripped)
+        if match:
+            timestamp_str, device_id, direction, content = match.groups()
+            return LogLine(
+                timestamp=datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S"),
+                device_id=device_id,
+                direction="in" if direction == "←" else "out",
+                content=cls.clean_content(content),
+                raw=raw
+            )
+        
+        # Try simplified format
+        match = cls.SIMPLE_PATTERN.match(stripped)
+        if match:
+            timestamp_str, device_id, content = match.groups()
+            return LogLine(
+                timestamp=datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S"),
+                device_id=device_id,
+                direction="in",  # Assume incoming for simplified format
+                content=cls.clean_content(content),
+                raw=raw
+            )
+        
+        # Try generic format with timestamp
+        return cls.parse_generic_line(stripped, raw)
+    
+    @classmethod
+    def parse_generic_line(cls, stripped: str, raw: str) -> Optional[LogLine]:
+        """
+        Parse any log line format as a fallback.
+        
+        Extracts timestamp if present, uses content directly for error detection.
+        """
+        timestamp = datetime.now()
+        device_id = "unknown"
+        
+        # Try to extract timestamp
+        ts_match = cls.GENERIC_TIMESTAMP.search(stripped)
+        if ts_match:
+            try:
+                ts_str = ts_match.group(1).replace('T', ' ')
+                timestamp = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                pass
+        
+        # Extract device from content if mentioned (e.g., "Router1:", "R1>", etc.)
+        device_patterns = [
+            r'\[(\w+)\]',           # [DeviceName]
+            r'<(\w+)>',             # <DeviceName>
+            r'(\w+)[>#:]',          # DeviceName> or DeviceName#
+        ]
+        for pattern in device_patterns:
+            dev_match = re.search(pattern, stripped)
+            if dev_match:
+                device_id = dev_match.group(1)
+                break
         
         return LogLine(
-            timestamp=datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S"),
+            timestamp=timestamp,
             device_id=device_id,
-            direction="in" if direction == "←" else "out",
-            content=cls.clean_content(content),
+            direction="in",
+            content=cls.clean_content(stripped),
             raw=raw
         )
     
@@ -107,6 +176,12 @@ class LogParser:
                 parsed = cls.parse_line(raw_line)
                 if parsed:
                     lines.append(parsed)
+        
+        if lines:
+            logger.debug(f"Parsed {len(lines)} log lines")
+        else:
+            logger.warning(f"No log lines parsed from content ({len(content)} chars)")
+        
         return lines
     
     @classmethod

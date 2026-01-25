@@ -32,6 +32,7 @@ class ConnectionManager:
     async def broadcast(self, message: dict):
         """Broadcast a message to all connected clients."""
         if not self.active_connections:
+            logger.debug("No active connections for broadcast")
             return
         
         # Convert to JSON
@@ -39,10 +40,13 @@ class ConnectionManager:
         
         # Send to all connections
         disconnected = set()
+        success_count = 0
+        
         async with self._lock:
             for connection in self.active_connections:
                 try:
                     await connection.send_text(json_message)
+                    success_count += 1
                 except Exception as e:
                     logger.warning(f"Failed to send to client: {e}")
                     disconnected.add(connection)
@@ -51,6 +55,8 @@ class ConnectionManager:
         if disconnected:
             async with self._lock:
                 self.active_connections -= disconnected
+        
+        logger.info(f"Broadcast complete: {success_count} success, {len(disconnected)} failed")
     
     async def broadcast_error(self, error_with_solution: ErrorWithSolution):
         """Broadcast an error update to all clients."""

@@ -29,18 +29,23 @@ class TestLogParser:
         assert "display version" in result.content
     
     def test_parse_invalid_line(self):
-        """Test that invalid lines return None."""
+        """Test that invalid lines are parsed with fallback (flexible parser)."""
         result = LogParser.parse_line("this is not a valid log line")
-        assert result is None
+        # Flexible parser returns a LogLine with 'unknown' device for any content
+        assert result is not None
+        assert result.device_id == "unknown"
+        assert result.direction == "in"
+        assert "not a valid" in result.content
     
     def test_clean_content_removes_escapes(self):
         """Test escape sequence removal."""
-        content = "\\x1b[Adisplay version\\r"
+        # Use actual escape sequence bytes
+        content = "\x1b[Adisplay version\r"
         cleaned = LogParser.clean_content(content)
         
         # Should not contain escape sequences
-        assert "\\x1b" not in cleaned
-        assert "\\r" not in cleaned
+        assert "\x1b" not in cleaned
+        assert "\r" not in cleaned
     
     def test_clean_content_removes_doubles(self):
         """Test doubled character removal."""

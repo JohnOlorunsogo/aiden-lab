@@ -1,8 +1,15 @@
-"""Error detection with Huawei VRP-specific patterns."""
+"""Error detection with Huawei VRP-specific patterns and TTL-based deduplication."""
 import re
-from typing import List, Optional, Tuple
+import time
+import logging
+from typing import List, Optional, Tuple, Dict
 from app.config import settings
 from app.models.error import LogLine, Severity
+
+logger = logging.getLogger(__name__)
+
+# Deduplication TTL in seconds (5 minutes)
+DEDUP_TTL_SECONDS = 300
 
 
 class ErrorDetector:
@@ -18,7 +25,31 @@ class ErrorDetector:
             re.compile(p, re.IGNORECASE) 
             for p in settings.error_patterns_warning
         ]
-        self._seen_errors: set = set()  # For deduplication
+        # TTL-based deduplication: {error_key: timestamp}
+        self._seen_errors: Dict[str, float] = {}
+    
+    def _cleanup_expired(self):
+        """Remove expired entries from deduplication cache."""
+        current_time = time.time()
+        expired_keys = [
+            key for key, ts in self._seen_errors.items()
+            if current_time - ts > DEDUP_TTL_SECONDS
+        ]
+        for key in expired_keys:
+            del self._seen_errors[key]
+        
+        if expired_keys:
+            logger.debug(f"Cleared {len(expired_keys)} expired dedup entries")
+    
+    def _is_duplicate(self, error_key: str) -> bool:
+        """Check if error is a duplicate within TTL window."""
+        self._cleanup_expired()
+        
+        if error_key in self._seen_errors:
+            return True
+        
+        self._seen_errors[error_key] = time.time()
+        return False
     
     def detect_in_lines(
         self, 
@@ -35,22 +66,25 @@ class ErrorDetector:
         """
         errors = []
         
+        logger.debug(f"Checking {len(lines)} lines for errors")
+        
         for line in lines:
-            # Only check incoming lines (from device)
-            if line.direction != "in":
-                continue
-            
+            # Check all lines now (removed direction filter for flexibility)
             result = self._check_line(line)
             if result:
                 severity, pattern = result
                 
-                # Deduplication - skip if we've seen this exact error recently
+                # Deduplication with TTL
                 error_key = f"{line.device_id}:{line.content[:100]}"
-                if error_key in self._seen_errors:
+                if self._is_duplicate(error_key):
+                    logger.debug(f"Skipping duplicate error: {error_key[:50]}...")
                     continue
-                self._seen_errors.add(error_key)
                 
+                logger.info(f"Detected {severity.value} error: {line.content[:80]}...")
                 errors.append((line, severity, pattern))
+        
+        if lines and not errors:
+            logger.debug(f"No errors detected in {len(lines)} lines")
         
         return errors
     
@@ -79,20 +113,40 @@ class ErrorDetector:
             for pattern in self._critical_patterns:
                 if pattern.search(line):
                     error_key = f"{device_id}:{line[:100]}"
-                    if error_key not in self._seen_errors:
-                        self._seen_errors.add(error_key)
+                    if not self._is_duplicate(error_key):
+                        logger.info(f"Detected CRITICAL error in raw text: {line[:80]}...")
                         errors.append((line.strip(), Severity.CRITICAL, pattern.pattern))
                     break
             else:
                 for pattern in self._warning_patterns:
                     if pattern.search(line):
                         error_key = f"{device_id}:{line[:100]}"
-                        if error_key not in self._seen_errors:
-                            self._seen_errors.add(error_key)
+                        if not self._is_duplicate(error_key):
+                            logger.info(f"Detected WARNING in raw text: {line[:80]}...")
                             errors.append((line.strip(), Severity.WARNING, pattern.pattern))
                         break
         
         return errors
+    
+    def detect_raw(
+        self,
+        content: str,
+        device_id: str = "unknown"
+    ) -> List[Tuple[str, Severity, str]]:
+        """
+        Detect errors in completely raw content (fallback method).
+        
+        This is used when the parser cannot parse any structured lines.
+        
+        Args:
+            content: Raw log content
+            device_id: Device identifier
+            
+        Returns:
+            List of (error_line, severity, matched_pattern) tuples
+        """
+        logger.debug(f"Using raw detection on {len(content)} chars from {device_id}")
+        return self.detect_in_text(content, device_id)
     
     def _check_line(self, line: LogLine) -> Optional[Tuple[Severity, str]]:
         """
@@ -128,10 +182,13 @@ class ErrorDetector:
             self._critical_patterns.append(compiled)
         else:
             self._warning_patterns.append(compiled)
+        logger.info(f"Added new {severity.value} pattern: {pattern}")
     
     def clear_seen(self):
         """Clear the deduplication cache."""
+        count = len(self._seen_errors)
         self._seen_errors.clear()
+        logger.info(f"Cleared {count} dedup entries")
     
     def get_patterns(self) -> dict:
         """Get current patterns."""
