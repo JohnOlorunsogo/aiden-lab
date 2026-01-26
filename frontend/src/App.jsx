@@ -1,6 +1,61 @@
 import { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom';
 import { fetchErrors, fetchActiveErrors, fetchStats, fetchHealth, dismissError, dismissAllErrors, WebSocketManager } from './services/api';
+import logoImage from './assets/logo.png';
+
+// ===== SVG Icons =====
+
+const IconClipboard = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" />
+    <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+  </svg>
+);
+
+const IconAlertTriangle = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+    <line x1="12" y1="9" x2="12" y2="13" />
+    <line x1="12" y1="17" x2="12.01" y2="17" />
+  </svg>
+);
+
+const IconMonitor = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+    <line x1="8" y1="21" x2="16" y2="21" />
+    <line x1="12" y1="17" x2="12" y2="21" />
+  </svg>
+);
+
+const IconFile = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+    <polyline points="14 2 14 8 20 8" />
+    <line x1="16" y1="13" x2="8" y2="13" />
+    <line x1="16" y1="17" x2="8" y2="17" />
+  </svg>
+);
+
+const IconActivity = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+  </svg>
+);
+
+const IconX = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6" y2="18" />
+    <line x1="6" y1="6" x2="18" y2="18" />
+  </svg>
+);
+
+const IconCheckCircle = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+    <polyline points="22 4 12 14.01 9 11.01" />
+  </svg>
+);
 
 // ===== Utility Components =====
 
@@ -85,7 +140,7 @@ function FormattedContent({ text }) {
       if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
         elements.push(
           <div key={`bullet-${key++}`} className="list-item">
-            <span className="list-bullet">•</span>
+            <span className="list-bullet">-</span>
             <span>{formatBoldText(trimmedLine.slice(2))}</span>
           </div>
         );
@@ -136,8 +191,8 @@ function Header({ isConnected }) {
     <header className="header">
       <div className="container header-content">
         <div className="logo">
-          <div className="logo-icon">🔍</div>
-          <span>AIDEN Labs</span>
+          <img src={logoImage} alt="AIDEN Labs" className="logo-image" />
+          <span className="logo-text">AIDEN Labs</span>
         </div>
 
         <nav className="nav">
@@ -165,20 +220,32 @@ function StatsGrid({ stats }) {
   return (
     <div className="stats-grid">
       <div className="card stat-card">
+        <div className="stat-icon">
+          <IconAlertTriangle />
+        </div>
         <div className="stat-value">{stats.total_errors || 0}</div>
         <div className="stat-label">Total Errors</div>
       </div>
       <div className="card stat-card">
+        <div className="stat-icon">
+          <IconMonitor />
+        </div>
         <div className="stat-value">{stats.devices_count || 0}</div>
         <div className="stat-label">Devices Monitored</div>
       </div>
       <div className="card stat-card">
+        <div className="stat-icon">
+          <IconFile />
+        </div>
         <div className="stat-value">{stats.watched_files?.length || 0}</div>
         <div className="stat-label">Active Log Files</div>
       </div>
       <div className="card stat-card">
+        <div className="stat-icon">
+          <IconActivity />
+        </div>
         <div className="stat-value" style={{ color: stats.watcher_running ? 'var(--color-success)' : 'var(--color-error)' }}>
-          {stats.watcher_running ? '●' : '○'}
+          {stats.watcher_running ? <IconCheckCircle /> : <IconX />}
         </div>
         <div className="stat-label">Watcher {stats.watcher_running ? 'Active' : 'Inactive'}</div>
       </div>
@@ -209,7 +276,7 @@ function ErrorCard({ error, solution, isNew, onDismiss, showDismiss = true }) {
               onClick={() => onDismiss(error.id)}
               title="Dismiss error"
             >
-              ✕
+              <IconX />
             </button>
           )}
         </div>
@@ -269,7 +336,9 @@ function ErrorList({ errors, newErrorIds, onDismiss, showDismiss = true }) {
   if (errors.length === 0) {
     return (
       <div className="empty-state">
-        <div className="empty-state-icon">📋</div>
+        <div className="empty-state-icon">
+          <IconClipboard />
+        </div>
         <h3>No Errors Detected</h3>
         <p>The system is monitoring your log files. Errors will appear here when detected.</p>
       </div>
@@ -296,7 +365,7 @@ function Dashboard({ errors, stats, newErrorIds, onDismiss, onDismissAll }) {
   return (
     <div className="page">
       <div className="container">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-lg)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--space-xl)' }}>
           <h1>Dashboard</h1>
           {errors.length > 0 && (
             <button className="btn btn-ghost" onClick={onDismissAll}>
@@ -305,7 +374,7 @@ function Dashboard({ errors, stats, newErrorIds, onDismiss, onDismissAll }) {
           )}
         </div>
         <StatsGrid stats={stats} />
-        <h2 style={{ marginBottom: 'var(--space-md)' }}>Recent Errors</h2>
+        <h2 style={{ marginBottom: 'var(--space-lg)' }}>Recent Errors</h2>
         <ErrorList errors={errors} newErrorIds={newErrorIds} onDismiss={onDismiss} showDismiss={true} />
       </div>
     </div>
@@ -342,16 +411,16 @@ function History() {
   return (
     <div className="page">
       <div className="container">
-        <h1 style={{ marginBottom: 'var(--space-lg)' }}>Error History</h1>
-        <p style={{ marginBottom: 'var(--space-md)', color: 'var(--color-text-muted)' }}>
+        <h1 style={{ marginBottom: 'var(--space-xl)' }}>Error History</h1>
+        <p style={{ marginBottom: 'var(--space-lg)', color: 'var(--color-text-muted)' }}>
           All errors including dismissed ones are shown here.
         </p>
         <ErrorList errors={errors} newErrorIds={new Set()} showDismiss={false} />
-        <div style={{ marginTop: 'var(--space-lg)', display: 'flex', gap: 'var(--space-md)', justifyContent: 'center' }}>
+        <div style={{ marginTop: 'var(--space-xl)', display: 'flex', gap: 'var(--space-md)', justifyContent: 'center' }}>
           <button className="btn btn-ghost" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1}>
             Previous
           </button>
-          <span style={{ padding: 'var(--space-sm)' }}>Page {page}</span>
+          <span style={{ padding: 'var(--space-sm)', color: 'var(--color-text-secondary)' }}>Page {page}</span>
           <button className="btn btn-ghost" onClick={() => setPage(p => p + 1)}>
             Next
           </button>
@@ -373,27 +442,27 @@ function Settings() {
   return (
     <div className="page">
       <div className="container">
-        <h1 style={{ marginBottom: 'var(--space-lg)' }}>Settings</h1>
+        <h1 style={{ marginBottom: 'var(--space-xl)' }}>Settings</h1>
 
-        <div className="card" style={{ marginBottom: 'var(--space-lg)' }}>
-          <h3 style={{ marginBottom: 'var(--space-md)' }}>System Status</h3>
+        <div className="card settings-section" style={{ marginBottom: 'var(--space-xl)' }}>
+          <h3 style={{ marginBottom: 'var(--space-lg)' }}>System Status</h3>
           {health ? (
-            <div>
-              <p><strong>Status:</strong> {health.status}</p>
-              <p><strong>Watcher:</strong> {health.watcher_running ? 'Running' : 'Stopped'}</p>
+            <div style={{ display: 'grid', gap: 'var(--space-md)' }}>
+              <p><strong>Status:</strong> <span style={{ color: 'var(--color-success)' }}>{health.status}</span></p>
+              <p><strong>Watcher:</strong> <span style={{ color: health.watcher_running ? 'var(--color-success)' : 'var(--color-error)' }}>{health.watcher_running ? 'Running' : 'Stopped'}</span></p>
               <p><strong>Watch Directory:</strong> <code>{health.watch_directory}</code></p>
             </div>
           ) : (
-            <p>Loading...</p>
+            <div className="loading"><div className="spinner"></div></div>
           )}
         </div>
 
-        <div className="card">
-          <h3 style={{ marginBottom: 'var(--space-md)' }}>Configuration</h3>
-          <p style={{ color: 'var(--color-text-muted)' }}>
+        <div className="card settings-section">
+          <h3 style={{ marginBottom: 'var(--space-lg)' }}>Configuration</h3>
+          <p style={{ color: 'var(--color-text-muted)', marginBottom: 'var(--space-md)' }}>
             Configuration is managed via environment variables. Edit the <code>.env</code> file to change settings.
           </p>
-          <ul style={{ marginTop: 'var(--space-md)', paddingLeft: 'var(--space-lg)' }}>
+          <ul className="settings-list">
             <li><code>GEMINI_API_KEY</code> - Your Gemini API key</li>
             <li><code>LOG_WATCH_DIR</code> - Directory to monitor for log files</li>
             <li><code>CONTEXT_LINES</code> - Lines of context for AI analysis</li>
