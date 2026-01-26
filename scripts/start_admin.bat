@@ -76,10 +76,10 @@ if exist "%PROJECT_ROOT%\Scripts\activate.bat" (
 )
 
 REM Build backend command with proper paths
-set "BACKEND_CMD=cd /d "%BACKEND_DIR%" && echo Installing Python dependencies... && pip install -r "%BACKEND_DIR%\requirements.txt" && echo. && echo Starting backend server... && python run.py"
+set "BACKEND_CMD=cd /d "%BACKEND_DIR%" && echo Installing Python dependencies... && python -m pip install -r "%BACKEND_DIR%\requirements.txt" && echo. && echo Starting backend server... && python run.py"
 
 if defined VENV_ACTIVATE (
-    set "BACKEND_CMD=cd /d "%BACKEND_DIR%" && call "%VENV_ACTIVATE%" && echo Installing Python dependencies... && pip install -r "%BACKEND_DIR%\requirements.txt" && echo. && echo Starting backend server... && python run.py"
+    set "BACKEND_CMD=cd /d "%BACKEND_DIR%" && call "%VENV_ACTIVATE%" && echo Installing Python dependencies... && python -m pip install -r "%BACKEND_DIR%\requirements.txt" && echo. && echo Starting backend server... && python run.py"
 )
 
 REM Start Backend in new window
