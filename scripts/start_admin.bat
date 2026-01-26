@@ -45,6 +45,11 @@ popd
 set "BACKEND_DIR=%PROJECT_ROOT%\backend"
 set "FRONTEND_DIR=%PROJECT_ROOT%\frontend"
 
+echo Project Root: %PROJECT_ROOT%
+echo Backend Dir:  %BACKEND_DIR%
+echo Frontend Dir: %FRONTEND_DIR%
+echo.
+
 REM Check if directories exist
 if not exist "%BACKEND_DIR%" (
     echo ERROR: Backend directory not found at %BACKEND_DIR%
@@ -62,25 +67,34 @@ REM Check for virtual environment
 set "VENV_ACTIVATE="
 if exist "%PROJECT_ROOT%\Scripts\activate.bat" (
     set "VENV_ACTIVATE=%PROJECT_ROOT%\Scripts\activate.bat"
+    echo Found venv at: %PROJECT_ROOT%\Scripts\activate.bat
 ) else if exist "%PROJECT_ROOT%\venv\Scripts\activate.bat" (
     set "VENV_ACTIVATE=%PROJECT_ROOT%\venv\Scripts\activate.bat"
+    echo Found venv at: %PROJECT_ROOT%\venv\Scripts\activate.bat
+) else (
+    echo No virtual environment found, using system Python
+)
+
+REM Build backend command with proper paths
+set "BACKEND_CMD=cd /d "%BACKEND_DIR%" && echo Installing Python dependencies... && pip install -r "%BACKEND_DIR%\requirements.txt" && echo. && echo Starting backend server... && python run.py"
+
+if defined VENV_ACTIVATE (
+    set "BACKEND_CMD=cd /d "%BACKEND_DIR%" && call "%VENV_ACTIVATE%" && echo Installing Python dependencies... && pip install -r "%BACKEND_DIR%\requirements.txt" && echo. && echo Starting backend server... && python run.py"
 )
 
 REM Start Backend in new window
+echo.
 echo Starting Backend...
-if defined VENV_ACTIVATE (
-    start "AIDEN Labs - Backend" cmd /k "cd /d "%BACKEND_DIR%" && call "%VENV_ACTIVATE%" && echo Checking dependencies... && pip install -q -r requirements.txt 2>nul & python run.py"
-) else (
-    start "AIDEN Labs - Backend" cmd /k "cd /d "%BACKEND_DIR%" && echo Checking dependencies... && pip install -q -r requirements.txt 2>nul & python run.py"
-)
+start "AIDEN Labs - Backend" cmd /k "%BACKEND_CMD%"
 echo Backend starting in new window...
 
 REM Wait a moment for backend to initialize
-timeout /t 3 /nobreak > nul
+timeout /t 5 /nobreak > nul
 
 REM Start Frontend in new window
 echo Starting Frontend...
-start "AIDEN Labs - Frontend" cmd /k "cd /d "%FRONTEND_DIR%" && if not exist node_modules (echo Installing dependencies... && npm install) & npm run dev"
+set "FRONTEND_CMD=cd /d "%FRONTEND_DIR%" && if not exist node_modules (echo Installing npm dependencies... && npm install) else (echo node_modules found) && echo. && echo Starting frontend dev server... && npm run dev"
+start "AIDEN Labs - Frontend" cmd /k "%FRONTEND_CMD%"
 echo Frontend starting in new window...
 
 echo.
