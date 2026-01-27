@@ -93,7 +93,7 @@ timeout /t 5 /nobreak > nul
 
 REM Start Frontend in new window
 echo Starting Frontend...
-set "FRONTEND_CMD=cd /d "%FRONTEND_DIR%" && if not exist node_modules (echo Installing npm dependencies... && npm install) else (echo node_modules found) && echo. && echo Starting frontend dev server... && npm run dev"
+set "FRONTEND_CMD=cd /d "%FRONTEND_DIR%" && (if not exist node_modules (echo Installing npm dependencies... && npm install)) && echo. && echo Starting frontend dev server... && npm run dev"
 start "AIDEN Labs - Frontend" cmd /k "%FRONTEND_CMD%"
 echo Frontend starting in new window...
 
