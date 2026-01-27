@@ -100,7 +100,11 @@ if [ ! -d "node_modules" ]; then
     npm install
 fi
 
-npm run dev &
+echo -e "${BLUE}Building frontend for production...${NC}"
+npm run build
+
+echo -e "${BLUE}Starting frontend preview server...${NC}"
+npm run preview &
 FRONTEND_PID=$!
 echo -e "${GREEN}Frontend started (PID: $FRONTEND_PID)${NC}"
 
@@ -108,7 +112,7 @@ echo -e "${GREEN}Frontend started (PID: $FRONTEND_PID)${NC}"
 
 echo -e "${GREEN}Services are running:${NC}"
 echo -e "  ${BLUE}Backend:${NC}  http://localhost:8000"
-echo -e "  ${BLUE}Frontend:${NC} http://localhost:5173"
+echo -e "  ${BLUE}Frontend:${NC} http://localhost:4173"
 echo -e "${YELLOW}Press Ctrl+C to stop all services${NC}\n"
 
 # Wait for either process to exit

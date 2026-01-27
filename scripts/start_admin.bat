@@ -93,7 +93,7 @@ timeout /t 5 /nobreak > nul
 
 REM Start Frontend in new window
 echo Starting Frontend...
-set "FRONTEND_CMD=cd /d "%FRONTEND_DIR%" && (if not exist node_modules (echo Installing npm dependencies... && npm install)) && echo. && echo Starting frontend dev server... && npm run dev"
+set "FRONTEND_CMD=cd /d "%FRONTEND_DIR%" && (if not exist node_modules (echo Installing npm dependencies... && npm install)) && echo. && echo Building frontend for production... && npm run build && echo. && echo Starting frontend preview server... && npm run preview"
 start "AIDEN Labs - Frontend" cmd /k "%FRONTEND_CMD%"
 echo Frontend starting in new window...
 
@@ -101,7 +101,7 @@ echo.
 echo =============================================
 echo Services are starting in separate windows:
 echo   Backend:  http://localhost:8000
-echo   Frontend: http://localhost:5173
+echo   Frontend: http://localhost:4173
 echo =============================================
 echo.
 echo Close this window or press any key to exit.
