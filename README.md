@@ -48,6 +48,43 @@ New packet capture capabilities added:
 - **Enhanced Error Detection**: Improved pattern matching for Huawei VRP errors
 - **Windows Compatibility**: Optimized polling for reliable Windows operation
 
+## Scripts
+
+Cross-platform startup scripts are provided in the `scripts/` directory.
+
+| Script | Platform | Purpose |
+|--------|----------|---------|
+| `start.sh` | Linux/macOS | Start both services in one terminal |
+| `start.bat` | Windows | Start both services in separate windows |
+| `start_admin.bat` | Windows | Start with administrator privileges |
+| `install_startup.bat` | Windows | Install auto-start at Windows login |
+| `uninstall_startup.bat` | Windows | Remove auto-start from Windows |
+
+### Linux / macOS
+
+```bash
+chmod +x scripts/start.sh   # first time only
+./scripts/start.sh
+```
+
+Press `Ctrl+C` to stop both services.
+
+### Windows
+
+- **Normal Start:** Double-click `start.bat`
+- **Admin Start:** Double-click `start_admin.bat` → click "Yes" on UAC
+- **Auto-Start at Login:** Double-click `install_startup.bat` → click "Yes" on UAC
+- **Remove Auto-Start:** Double-click `uninstall_startup.bat` → click "Yes" on UAC
+
+### Service URLs
+
+| Service | URL |
+|---------|-----|
+| Backend API | http://localhost:8000 |
+| Frontend UI | http://localhost:5173 |
+
+> **Note:** Scripts auto-detect Python virtual environments and install npm dependencies if `node_modules` is missing.
+
 ## License
 
 MIT
