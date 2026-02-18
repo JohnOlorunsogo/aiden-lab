@@ -8,7 +8,7 @@ A real-time log monitoring system for Huawei ENSP devices that detects errors an
 ```bash
 cd backend
 pip install -r requirements.txt
-cp .env.example .env  # Configure paths and API key
+cp .env.example .env  # Configure paths and LLM server URL
 python run.py
 ```
 
@@ -24,7 +24,7 @@ npm run dev
 - **Monitoring Layer**: Watches log files for changes (watchdog)
 - **Capture Layer**: Live eNSP console packet monitoring (Scapy)
 - **Detection Layer**: Scans for Huawei VRP error patterns
-- **Processing Layer**: Analyzes errors with Gemini AI and intelligent text cleaning
+- **Processing Layer**: Analyzes errors with a self-hosted LLM (llama.cpp) and intelligent text cleaning
 - **Output Layer**: Real-time web dashboard
 
 ## Configuration
@@ -32,7 +32,8 @@ npm run dev
 Edit `.env` to configure:
 - `LOG_WATCH_DIR`: Directory containing device log files  
 - `ENSP_SNIFFER_LOG_DIR`: Directory for eNSP packet capture logs
-- `GEMINI_API_KEY`: Your Google Gemini API key
+- `LLM_BASE_URL`: Base URL of your self-hosted LLM server (default: `http://159.138.135.202:8000`)
+- `LLM_MODEL`: Model name for the LLM (default: `gemma-3-1b-it-GGUF`)
 - `CONTEXT_LINES`: Lines of context for AI analysis (default: 30)
 - `ENSP_MODE`: Console monitoring mode (standard, extended, lab, custom)
 - `ENSP_CONSOLE_PORT_RANGE`: Port range for device detection (default: 2000-2004)
