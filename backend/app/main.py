@@ -8,7 +8,7 @@ from app.config import settings
 from app.api.routes import router as api_router
 from app.api.websocket import websocket_endpoint, ws_manager
 from app.services.database import db
-from app.services.gemini import gemini_service
+from app.services.llm import llm_service
 from app.services.ensp_logger_service import ensp_logger_service
 from app.core.watcher import log_watcher
 from app.core.analyzer import error_analyzer
@@ -27,14 +27,11 @@ async def lifespan(app: FastAPI):
     await db.connect()
     logger.info("Database connected")
     
-    if settings.gemini_api_key:
-        try:
-            gemini_service.configure()
-            logger.info("Gemini API configured")
-        except Exception as e:
-            logger.warning(f"Gemini API not configured: {e}")
-    else:
-        logger.warning("GEMINI_API_KEY not set - AI analysis disabled")
+    try:
+        llm_service.configure()
+        logger.info(f"LLM service configured: {settings.llm_base_url}")
+    except Exception as e:
+        logger.warning(f"LLM service not configured: {e}")
     
     error_analyzer.register_broadcast(ws_manager.broadcast_error)
     log_watcher.register_async_callback(error_analyzer.process_new_content)

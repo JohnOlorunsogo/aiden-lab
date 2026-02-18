@@ -6,7 +6,7 @@ from typing import Optional
 from pathlib import Path
 
 from app.services.database import db
-from app.services.gemini import gemini_service
+from app.services.llm import llm_service
 from app.core.detector import error_detector
 from app.core.watcher import log_watcher
 from app.config import settings
@@ -181,8 +181,8 @@ async def reanalyze_errors():
     
     for error in errors_without_solutions:
         try:
-            # Analyze with Gemini
-            solution = await gemini_service.analyze_error(error, "")
+            # Analyze with LLM
+            solution = await llm_service.analyze_error(error, "")
             solution.error_id = error.id
             
             # Store solution
