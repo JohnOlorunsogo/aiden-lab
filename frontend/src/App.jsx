@@ -68,7 +68,6 @@ function FormattedContent({ text }) {
   // Process the text to handle code blocks and formatting
   const formatText = (content) => {
     const parts = [];
-    let remaining = content;
     let key = 0;
 
     // Handle code blocks first
@@ -524,26 +523,59 @@ function App() {
     }
   }, []);
 
+  // Synchronize state from REST API
+  const syncState = useCallback(async () => {
+    try {
+      const data = await fetchActiveErrors(1, 20);
+      setErrors(prev => {
+        const prevIds = new Set(prev.map(item => item.error.id));
+        const newlyAddedIds = data.errors
+          .filter(item => !prevIds.has(item.error.id))
+          .map(item => item.error.id);
+
+        if (newlyAddedIds.length > 0) {
+          setNewErrorIds(ids => new Set([...ids, ...newlyAddedIds]));
+        }
+        return data.errors;
+      });
+
+      const statsData = await fetchStats();
+      setStats(statsData);
+    } catch (err) {
+      console.error('Failed to sync state:', err);
+    }
+  }, []);
+
+  // Interval-based polling when disconnected
+  useEffect(() => {
+    if (isConnected) return;
+
+    // Fallback polling when WebSocket drops
+    const interval = setInterval(() => {
+      syncState();
+    }, 5000); // 5 seconds interval
+
+    return () => clearInterval(interval);
+  }, [isConnected, syncState]);
+
   // Initialize WebSocket and fetch initial data
   useEffect(() => {
     const ws = new WebSocketManager(
       handleMessage,
-      () => setIsConnected(true),
+      (isReconnect) => {
+        setIsConnected(true);
+        if (isReconnect) syncState();
+      },
       () => setIsConnected(false)
     );
     ws.connect();
 
-    // Fetch initial data - use active errors for dashboard
-    fetchActiveErrors(1, 20)
-      .then(data => setErrors(data.errors))
-      .catch(console.error);
-
-    fetchStats()
-      .then(setStats)
-      .catch(console.error);
+    // Fetch initial state once on mount
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    syncState();
 
     return () => ws.disconnect();
-  }, [handleMessage]);
+  }, [handleMessage, syncState]);
 
   // Clear "new" status after animation
   useEffect(() => {

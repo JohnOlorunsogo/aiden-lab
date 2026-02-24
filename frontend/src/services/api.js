@@ -98,6 +98,7 @@ export class WebSocketManager {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
         this.reconnectDelay = 2000;
+        this.hasConnectedOnce = false;
     }
 
     connect() {
@@ -111,7 +112,8 @@ export class WebSocketManager {
             this.ws.onopen = () => {
                 console.log('WebSocket connected');
                 this.reconnectAttempts = 0;
-                if (this.onConnect) this.onConnect();
+                if (this.onConnect) this.onConnect(this.hasConnectedOnce);
+                this.hasConnectedOnce = true;
             };
 
             this.ws.onmessage = (event) => {
