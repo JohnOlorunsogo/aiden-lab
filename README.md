@@ -81,7 +81,7 @@ Press `Ctrl+C` to stop both services.
 | Service | URL |
 |---------|-----|
 | Backend API | http://localhost:8000 |
-| Frontend UI | http://localhost:5173 |
+| Frontend UI | http://localhost:4173 |
 
 > **Note:** Scripts auto-detect Python virtual environments and install npm dependencies if `node_modules` is missing.
 
