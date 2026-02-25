@@ -95,14 +95,17 @@ export class WebSocketManager {
         this.onMessage = onMessage;
         this.onConnect = onConnect;
         this.onDisconnect = onDisconnect;
+
         this.reconnectAttempts = 0;
-        this.maxReconnectAttempts = 10;
-        this.reconnectDelay = 2000;
+        this.maxReconnectDelay = 30000; // max 30s
+        this.baseReconnectDelay = 1000;
+
         this.hasConnectedOnce = false;
+        this.pingInterval = null;
     }
 
     connect() {
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
             return;
         }
 
@@ -112,16 +115,19 @@ export class WebSocketManager {
             this.ws.onopen = () => {
                 console.log('WebSocket connected');
                 this.reconnectAttempts = 0;
+
                 if (this.onConnect) this.onConnect(this.hasConnectedOnce);
                 this.hasConnectedOnce = true;
+
+                this.startHeartbeat();
             };
 
             this.ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'ping') {
-                        this.ws.send('ping');
-                    } else if (this.onMessage) {
+                        this.ws.send(JSON.stringify({ type: 'pong' }));
+                    } else if (data.type !== 'pong' && this.onMessage) {
                         this.onMessage(data);
                     }
                 } catch (e) {
@@ -131,12 +137,14 @@ export class WebSocketManager {
 
             this.ws.onclose = () => {
                 console.log('WebSocket disconnected');
+                this.cleanup();
                 if (this.onDisconnect) this.onDisconnect();
                 this.attemptReconnect();
             };
 
             this.ws.onerror = (error) => {
                 console.error('WebSocket error:', error);
+                // onerror will typically be followed by onclose, which handles reconnect
             };
         } catch (error) {
             console.error('Failed to create WebSocket:', error);
@@ -144,15 +152,47 @@ export class WebSocketManager {
         }
     }
 
+    startHeartbeat() {
+        this.stopHeartbeat();
+        // Send a ping every 15 seconds to keep the connection alive
+        this.pingInterval = setInterval(() => {
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                this.ws.send(JSON.stringify({ type: 'ping' }));
+            }
+        }, 15000);
+    }
+
+    stopHeartbeat() {
+        if (this.pingInterval) {
+            clearInterval(this.pingInterval);
+            this.pingInterval = null;
+        }
+    }
+
     attemptReconnect() {
-        if (this.reconnectAttempts < this.maxReconnectAttempts) {
-            this.reconnectAttempts++;
-            console.log(`Reconnecting... attempt ${this.reconnectAttempts}`);
-            setTimeout(() => this.connect(), this.reconnectDelay);
+        // Exponential backoff with a cap
+        this.reconnectAttempts++;
+        const delay = Math.min(
+            this.baseReconnectDelay * Math.pow(1.5, this.reconnectAttempts - 1),
+            this.maxReconnectDelay
+        );
+
+        console.log(`Reconnecting... attempt ${this.reconnectAttempts} in ${Math.round(delay / 1000)}s`);
+        setTimeout(() => this.connect(), delay);
+    }
+
+    cleanup() {
+        this.stopHeartbeat();
+        if (this.ws) {
+            this.ws.onclose = null;
+            this.ws.onmessage = null;
+            this.ws.onerror = null;
+            this.ws.onopen = null;
         }
     }
 
     disconnect() {
+        this.cleanup();
         if (this.ws) {
             this.ws.close();
             this.ws = null;

@@ -103,13 +103,19 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             # Keep connection alive, wait for messages
             try:
-                data = await asyncio.wait_for(
+                data_str = await asyncio.wait_for(
                     websocket.receive_text(),
                     timeout=30.0
                 )
-                # Handle ping/pong for keepalive
-                if data == "ping":
-                    await websocket.send_text("pong")
+                
+                try:
+                    data = json.loads(data_str)
+                    if isinstance(data, dict) and data.get("type") == "ping":
+                        await websocket.send_text(json.dumps({"type": "pong"}))
+                except json.JSONDecodeError:
+                    # Fallback for old clients
+                    if data_str == "ping":
+                        await websocket.send_text(json.dumps({"type": "pong"}))
             except asyncio.TimeoutError:
                 # Send keepalive ping
                 try:
