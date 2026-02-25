@@ -17,7 +17,14 @@ except Exception:
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    gemini_api_key: str = Field(default="", description="Google Gemini API key")
+    llm_base_url: str = Field(
+        default="http://159.138.135.202:8000",
+        description="Base URL of the self-hosted LLM server"
+    )
+    llm_model: str = Field(
+        default="gemma-3-1b-it-GGUF",
+        description="Model name for the self-hosted LLM"
+    )
     
     log_watch_dir: Path = Field(
         default="data/logs",

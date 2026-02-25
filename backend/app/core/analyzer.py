@@ -9,7 +9,7 @@ from app.core.parser import LogParser
 from app.core.detector import error_detector
 from app.core.extractor import context_extractor
 from app.services.database import db
-from app.services.gemini import gemini_service
+from app.services.llm import llm_service
 from app.models.error import DetectedError, Solution, ErrorWithSolution, Severity, LogLine
 
 logger = logging.getLogger(__name__)
@@ -131,7 +131,7 @@ class ErrorAnalyzer:
             
             logger.info(f"Stored raw error {error_id}: {error_line[:50]}...")
             
-            # Analyze with Gemini (async, non-blocking)
+            # Analyze with LLM (async, non-blocking)
             asyncio.create_task(
                 self._analyze_and_store(detected_error, "")
             )
@@ -197,7 +197,7 @@ class ErrorAnalyzer:
         """Analyze error with Gemini and store solution."""
         try:
             # Get AI analysis
-            solution = await gemini_service.analyze_error(error, command_history)
+            solution = await llm_service.analyze_error(error, command_history)
             solution.error_id = error.id
             
             # Store solution
@@ -211,7 +211,7 @@ class ErrorAnalyzer:
             await self._broadcast(ErrorWithSolution(error=error, solution=solution))
             
         except Exception as e:
-            logger.error(f"Error analyzing with Gemini: {e}", exc_info=True)
+            logger.error(f"Error analyzing with LLM: {e}", exc_info=True)
     
     async def _broadcast(self, error_with_solution: ErrorWithSolution):
         """Broadcast to all registered callbacks."""
