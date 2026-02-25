@@ -12,11 +12,18 @@ cp .env.example .env  # Configure paths and LLM server URL
 python run.py
 ```
 
-### Frontend
+### Frontend (User Dashboard)
 ```bash
 cd frontend
-npm install
-npm run dev
+bun install
+bun run dev
+```
+
+### VM Admin Frontend
+```bash
+cd vm-admin-frontend
+bun install
+bun run dev
 ```
 
 ## Architecture
@@ -25,7 +32,14 @@ npm run dev
 - **Capture Layer**: Live eNSP console packet monitoring (Scapy)
 - **Detection Layer**: Scans for Huawei VRP error patterns
 - **Processing Layer**: Analyzes errors with a self-hosted LLM (llama.cpp) and intelligent text cleaning
-- **Output Layer**: Real-time web dashboard
+- **Output Layer**: Real-time web dashboard (User Dashboard & VM Admin)
+
+## Frontends
+
+This project includes two frontend applications:
+
+1. **User Dashboard** (`frontend/`): Main log monitoring and analysis interface
+2. **VM Admin** (`vm-admin-frontend/`): Virtual machine management interface
 
 ## Configuration
 
@@ -81,9 +95,10 @@ Press `Ctrl+C` to stop both services.
 | Service | URL |
 |---------|-----|
 | Backend API | http://localhost:8000 |
-| Frontend UI | http://localhost:4173 |
+| Frontend UI (User Dashboard) | http://localhost:4173 |
+| VM Admin Frontend | http://localhost:5173 |
 
-> **Note:** Scripts auto-detect Python virtual environments and install npm dependencies if `node_modules` is missing.
+> **Note:** Scripts auto-detect Python virtual environments and install bun dependencies if `node_modules` is missing.
 
 ## License
 
