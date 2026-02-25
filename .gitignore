@@ -12,7 +12,7 @@ dist/
 build/
 bin/
 include/
-lib/
+/lib/
 
 # Environment
 .env
