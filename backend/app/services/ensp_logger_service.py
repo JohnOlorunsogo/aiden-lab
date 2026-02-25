@@ -1,4 +1,5 @@
-"""Service wrapper for ENSP packet sniffer with lifecycle management."""
+"""Service wrapper for ENSP logger with proxy and sniffer modes."""
+import asyncio
 import logging
 import threading
 import platform
@@ -22,13 +23,15 @@ def check_admin_privileges() -> bool:
 
 
 class ENSPLoggerService:
-    """Service to manage ENSP packet sniffer lifecycle."""
+    """Service to manage ENSP logger lifecycle (proxy or sniffer mode)."""
     
     def __init__(self):
         self.sniffer: Optional[ENSPPacketSniffer] = None
+        self._proxy = None  # TelnetProxy instance (lazy import)
         self._thread: Optional[threading.Thread] = None
         self._running = False
         self._enabled = True
+        self._mode = "proxy"  # "proxy" or "sniffer"
         
     def _parse_port_range(self, port_range: str) -> Set[int]:
         ports = set()
@@ -86,6 +89,7 @@ class ENSPLoggerService:
         return log_dir
     
     def start(self) -> bool:
+        """Start the logger service in the configured mode."""
         if self._running:
             logger.warning("ENSP logger service already running")
             return True
@@ -94,8 +98,55 @@ class ENSPLoggerService:
             logger.info("ENSP logger service is disabled")
             return False
         
+        self._mode = settings.ensp_capture_mode
+        
+        if self._mode == "proxy":
+            return self._start_proxy()
+        else:
+            return self._start_sniffer()
+    
+    def _start_proxy(self) -> bool:
+        """Start the Telnet proxy for full CLI capture."""
+        try:
+            from app.services.telnet_proxy import TelnetProxy
+            
+            console_ports = self._get_console_ports()
+            log_dir = self._get_log_directory()
+            
+            logger.info("Initializing ENSP logger in PROXY mode")
+            logger.info(f"Console ports: {sorted(console_ports)}")
+            logger.info(f"Target host: {settings.ensp_target_host}")
+            logger.info(f"Port offset: {settings.ensp_proxy_port_offset}")
+            logger.info(f"Log directory: {log_dir.resolve()}")
+            
+            proxy_ports = {p + settings.ensp_proxy_port_offset for p in console_ports}
+            logger.info(f"Proxy listening ports: {sorted(proxy_ports)}")
+            logger.info(f"Connect your Telnet client to ports {sorted(proxy_ports)} instead of {sorted(console_ports)}")
+            
+            self._proxy = TelnetProxy(
+                console_ports=console_ports,
+                target_host=settings.ensp_target_host,
+                port_offset=settings.ensp_proxy_port_offset,
+                log_dir=log_dir,
+            )
+            
+            # Schedule the proxy start on the running event loop
+            loop = asyncio.get_event_loop()
+            loop.create_task(self._proxy.start())
+            
+            self._running = True
+            logger.info("ENSP Telnet proxy service started successfully")
+            return True
+            
+        except Exception as exc:
+            logger.error(f"Failed to start ENSP proxy service: {exc}", exc_info=True)
+            self._running = False
+            return False
+    
+    def _start_sniffer(self) -> bool:
+        """Start the legacy passive packet sniffer."""
         if not SCAPY_AVAILABLE:
-            logger.warning("Scapy not available - ENSP logger cannot start. Install with: pip install scapy>=2.5.0")
+            logger.warning("Scapy not available - ENSP sniffer cannot start. Install with: pip install scapy>=2.5.0")
             return False
         
         if not check_admin_privileges():
@@ -109,7 +160,7 @@ class ENSPLoggerService:
             console_ports = self._get_console_ports()
             log_dir = self._get_log_directory()
             
-            logger.info(f"Initializing ENSP logger service")
+            logger.info("Initializing ENSP logger in SNIFFER mode (legacy)")
             logger.info(f"Mode: {settings.ensp_mode}")
             logger.info(f"Console ports: {sorted(console_ports) if console_ports else 'auto-detect'}")
             logger.info(f"Log directory: {log_dir.resolve()}")
@@ -121,28 +172,42 @@ class ENSPLoggerService:
                 auto_detect=self._get_auto_detect()
             )
             
-            # Start sniffer in current thread (it uses AsyncSniffer which is async)
             self.sniffer.start()
             self._running = True
-            logger.info("ENSP logger service started successfully")
+            logger.info("ENSP sniffer service started successfully")
             return True
             
         except Exception as exc:
-            logger.error(f"Failed to start ENSP logger service: {exc}", exc_info=True)
+            logger.error(f"Failed to start ENSP sniffer service: {exc}", exc_info=True)
             self._running = False
             return False
     
     def stop(self):
+        """Stop the running service (proxy or sniffer)."""
         if not self._running:
             return
         
         logger.info("Stopping ENSP logger service...")
-        try:
-            if self.sniffer:
+        
+        # Stop proxy
+        if self._proxy:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._proxy.stop())
+                else:
+                    loop.run_until_complete(self._proxy.stop())
+            except Exception as exc:
+                logger.error(f"Error stopping ENSP proxy: {exc}", exc_info=True)
+            self._proxy = None
+        
+        # Stop sniffer
+        if self.sniffer:
+            try:
                 self.sniffer.stop()
-                self.sniffer = None
-        except Exception as exc:
-            logger.error(f"Error stopping ENSP logger: {exc}", exc_info=True)
+            except Exception as exc:
+                logger.error(f"Error stopping ENSP sniffer: {exc}", exc_info=True)
+            self.sniffer = None
         
         self._running = False
         logger.info("ENSP logger service stopped")
@@ -180,11 +245,17 @@ class ENSPLoggerService:
     
     @property
     def is_running(self) -> bool:
+        if self._mode == "proxy":
+            return self._running and self._proxy is not None and self._proxy.is_running
         return self._running and self.sniffer is not None and self.sniffer.is_running
     
     @property
     def is_enabled(self) -> bool:
         return self._enabled
+    
+    @property
+    def capture_mode(self) -> str:
+        return self._mode
 
 
 ensp_logger_service = ENSPLoggerService()

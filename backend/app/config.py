@@ -58,6 +58,18 @@ class Settings(BaseSettings):
         default=True,
         description="Enable/disable ENSP packet sniffer"
     )
+    ensp_capture_mode: str = Field(
+        default="proxy",
+        description="Capture mode: 'proxy' (Telnet proxy, recommended) or 'sniffer' (passive packet capture)"
+    )
+    ensp_proxy_port_offset: int = Field(
+        default=1000,
+        description="Port offset for Telnet proxy (e.g., 1000 means eNSP port 2000 → proxy port 3000)"
+    )
+    ensp_target_host: str = Field(
+        default="127.0.0.1",
+        description="Host where eNSP is running (for proxy to connect to)"
+    )
     
     context_lines: int = Field(
         default=30,
