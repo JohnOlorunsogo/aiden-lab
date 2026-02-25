@@ -31,6 +31,10 @@ TELNET_DONT = 254
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 
+# If capture drops packets, avoid getting stuck waiting forever.
+MAX_GAP_BYTES = 8192
+GAP_TIMEOUT_SEC = 1.0
+
 
 @dataclass
 class TelnetDecodeState:
@@ -49,6 +53,7 @@ class TcpStreamState:
     next_seq: Optional[int] = None
     pending: Dict[int, bytes] = field(default_factory=dict)
     last_seen: float = field(default_factory=datetime.datetime.now().timestamp)
+    gap_since: Optional[float] = None
 
 
 class SessionLogger:
@@ -391,17 +396,28 @@ class ENSPPacketSniffer:
                 return b""
 
         if state.next_seq is not None and seq > state.next_seq:
-            current = state.pending.get(seq)
-            if current is None or len(payload) > len(current):
-                state.pending[seq] = payload
-            if len(state.pending) > 256:
-                oldest = min(state.pending)
-                state.pending.pop(oldest, None)
-            return b""
+            # If we have a large/long gap, resync to avoid stalling.
+            if state.gap_since is None:
+                state.gap_since = state.last_seen
+            gap_bytes = seq - state.next_seq
+            gap_age = state.last_seen - (state.gap_since or state.last_seen)
+            if gap_bytes >= MAX_GAP_BYTES or gap_age >= GAP_TIMEOUT_SEC:
+                state.next_seq = seq
+                state.pending.clear()
+                state.gap_since = None
+            else:
+                current = state.pending.get(seq)
+                if current is None or len(payload) > len(current):
+                    state.pending[seq] = payload
+                if len(state.pending) > 256:
+                    oldest = min(state.pending)
+                    state.pending.pop(oldest, None)
+                return b""
 
         emitted = bytearray(payload)
         if state.next_seq is not None:
             state.next_seq += len(payload)
+            state.gap_since = None
         emitted.extend(self._consume_pending(state))
         return bytes(emitted)
 

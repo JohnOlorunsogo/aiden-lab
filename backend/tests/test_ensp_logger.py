@@ -63,3 +63,15 @@ def test_reassemble_payload_handles_short_out_of_order_window():
     assert start == b"abcde"
     assert out_of_order == b""
     assert bridge == b"fghijklm\r\n"
+
+
+def test_reassemble_payload_resyncs_on_large_gap():
+    sniffer = _make_sniffer_without_init()
+    key = (2000, 50123, 2000, OUTGOING)
+
+    start = sniffer._reassemble_payload(key, 100, b"abcde")
+    # Large gap should resync and emit payload instead of stalling.
+    gap = sniffer._reassemble_payload(key, 100 + 9000, b"XYZ\r\n")
+
+    assert start == b"abcde"
+    assert gap == b"XYZ\r\n"
