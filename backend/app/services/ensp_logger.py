@@ -169,39 +169,16 @@ class SessionLogger:
         cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
         cleaned = cleaned.strip()
 
-        # Fix exact full-line duplication (common with packet overlap artefacts).
-        if len(cleaned) >= 2 and len(cleaned) % 2 == 0:
-            half = len(cleaned) // 2
-            if cleaned[:half] == cleaned[half:]:
-                cleaned = cleaned[:half]
+        # Note: half-line dedup removed — it was too aggressive and could
+        # destroy valid response content.  TCP-layer overlap is already
+        # handled by _reassemble_payload.
 
-        return re.sub(r"\s+", " ", cleaned).strip()
+        # Collapse runs of spaces/tabs but preserve overall structure.
+        cleaned = re.sub(r"[ \t]+", " ", cleaned)
+        return cleaned.strip()
 
-    @staticmethod
-    def _normalize_echo(text: str) -> str:
-        """Normalize potential echo lines to compare with recent outgoing commands."""
-        if not text:
-            return ""
-
-        if len(text) >= 2 and len(text) % 2 == 0:
-            is_pair_doubled = True
-            out = []
-            for i in range(0, len(text), 2):
-                if text[i] != text[i + 1]:
-                    is_pair_doubled = False
-                    break
-                out.append(text[i])
-            if is_pair_doubled:
-                text = "".join(out)
-
-        collapsed = []
-        prev = None
-        for ch in text:
-            if ch == prev:
-                continue
-            collapsed.append(ch)
-            prev = ch
-        return "".join(collapsed)
+    # _normalize_echo removed — it was too fuzzy and could falsely match
+    # legitimate response lines against outgoing commands.
 
     def write(self, port: int, direction: str, data: bytes):
         key = (port, direction)
@@ -241,6 +218,11 @@ class SessionLogger:
             if self._is_prompt_line(frag):
                 self._log_line(port, direction, frag)
                 buffers[port] = ""
+            elif len(buffers[port]) > 512:
+                # Flush stale buffer — the response chunk probably had no
+                # trailing newline. Emit whatever we have so far.
+                self._log_line(port, direction, buffers[port])
+                buffers[port] = ""
 
     def _log_line(self, port: int, direction: str, text: str):
         cleaned_text = self._clean_console_text(text)
@@ -250,22 +232,26 @@ class SessionLogger:
         key = (port, direction)
         last_line = self.last_lines.get(key, "")
 
-        # Suppress incoming echo lines that match recent outgoing commands.
-        if direction == INCOMING and len(cleaned_text) <= 64:
+        # Suppress incoming echo lines that are an exact match of the last
+        # outgoing command (Telnet echoes typed characters back).
+        if direction == INCOMING and len(cleaned_text) <= 120:
             last_out = self.last_outgoing.get(port)
             if last_out:
                 last_cmd, ts = last_out
                 if (datetime.datetime.now().timestamp() - ts) <= 2.0:
-                    if self._normalize_echo(cleaned_text) == self._normalize_echo(last_cmd):
+                    if cleaned_text.strip() == last_cmd.strip():
                         return
 
         if cleaned_text == last_line:
+            if direction == OUTGOING:
+                # Suppress repeated outgoing commands (key-repeat / paste).
+                return
             if self._is_prompt_line(cleaned_text):
                 self.duplicate_prompt_count[key] = self.duplicate_prompt_count.get(key, 0) + 1
-                if self.duplicate_prompt_count[key] > 1:
+                if self.duplicate_prompt_count[key] > 2:
                     return
-            else:
-                return
+            # For INCOMING non-prompt lines: allow through — device responses
+            # can legitimately contain repeated lines (routing tables, etc.).
         else:
             self.duplicate_prompt_count[key] = 0
 
