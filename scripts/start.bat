@@ -70,7 +70,7 @@ timeout /t 5 /nobreak > nul
 
 REM Start Frontend in new window
 echo Starting Frontend...
-set "FRONTEND_CMD=cd /d "%FRONTEND_DIR%" && (where bun >nul 2>nul || (echo ERROR: bun is not installed. Please install bun. && pause && exit /b 1)) && (if not exist node_modules (echo Installing bun dependencies... && bun install)) && echo. && echo Building frontend for production... && bun run build && echo. && echo Starting frontend preview server... && bun run preview"
+set "FRONTEND_CMD=cd /d "%FRONTEND_DIR%" && (if not exist node_modules (echo Installing npm dependencies... && npm install)) && echo. && echo Building frontend for production... && npm run build && echo. && echo Starting frontend preview server... && npm run preview"
 start "AIDEN Labs - Frontend" cmd /k "%FRONTEND_CMD%"
 echo Frontend starting in new window...
 

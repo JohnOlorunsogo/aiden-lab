@@ -94,23 +94,17 @@ sleep 2
 echo -e "${GREEN}Starting Frontend...${NC}"
 cd "$FRONTEND_DIR"
 
-# Check if bun is installed
-if ! command -v bun &> /dev/null; then
-    echo -e "${RED}Error: bun is not installed. Please install bun to run the frontend.${NC}"
-    exit 1
-fi
-
 # Check if node_modules exists
 if [ ! -d "node_modules" ]; then
     echo -e "${YELLOW}Installing frontend dependencies...${NC}"
-    bun install
+    npm install
 fi
 
 echo -e "${BLUE}Building frontend for production...${NC}"
-bun run build
+npm run build
 
 echo -e "${BLUE}Starting frontend preview server...${NC}"
-bun run preview &
+npm run preview &
 FRONTEND_PID=$!
 echo -e "${GREEN}Frontend started (PID: $FRONTEND_PID)${NC}"
 
