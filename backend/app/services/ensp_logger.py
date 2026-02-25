@@ -69,6 +69,7 @@ class SessionLogger:
         self.last_lines: Dict[Tuple[int, str], str] = {}
         self.duplicate_prompt_count: Dict[Tuple[int, str], int] = {}
         self.telnet_states: Dict[Tuple[int, str], TelnetDecodeState] = {}
+        self.last_outgoing: Dict[int, Tuple[str, float]] = {}
 
     def _open(self, port: int):
         if port in self.handles:
@@ -176,6 +177,32 @@ class SessionLogger:
 
         return re.sub(r"\s+", " ", cleaned).strip()
 
+    @staticmethod
+    def _normalize_echo(text: str) -> str:
+        """Normalize potential echo lines to compare with recent outgoing commands."""
+        if not text:
+            return ""
+
+        if len(text) >= 2 and len(text) % 2 == 0:
+            is_pair_doubled = True
+            out = []
+            for i in range(0, len(text), 2):
+                if text[i] != text[i + 1]:
+                    is_pair_doubled = False
+                    break
+                out.append(text[i])
+            if is_pair_doubled:
+                text = "".join(out)
+
+        collapsed = []
+        prev = None
+        for ch in text:
+            if ch == prev:
+                continue
+            collapsed.append(ch)
+            prev = ch
+        return "".join(collapsed)
+
     def write(self, port: int, direction: str, data: bytes):
         key = (port, direction)
         payload = self._strip_telnet_controls(key, data)
@@ -223,6 +250,15 @@ class SessionLogger:
         key = (port, direction)
         last_line = self.last_lines.get(key, "")
 
+        # Suppress incoming echo lines that match recent outgoing commands.
+        if direction == INCOMING and len(cleaned_text) <= 64:
+            last_out = self.last_outgoing.get(port)
+            if last_out:
+                last_cmd, ts = last_out
+                if (datetime.datetime.now().timestamp() - ts) <= 2.0:
+                    if self._normalize_echo(cleaned_text) == self._normalize_echo(last_cmd):
+                        return
+
         if cleaned_text == last_line:
             if self._is_prompt_line(cleaned_text):
                 self.duplicate_prompt_count[key] = self.duplicate_prompt_count.get(key, 0) + 1
@@ -243,6 +279,9 @@ class SessionLogger:
         handle = self.handles[port]
         handle.write(line)
         handle.flush()
+
+        if direction == OUTGOING:
+            self.last_outgoing[port] = (cleaned_text, datetime.datetime.now().timestamp())
 
     def _detect_device_name(self, port: int, direction: str, text: str):
         """Extract device hostname from router prompts."""
@@ -295,6 +334,7 @@ class SessionLogger:
         self.last_lines.clear()
         self.duplicate_prompt_count.clear()
         self.telnet_states.clear()
+        self.last_outgoing.clear()
 
 
 class ENSPPacketSniffer:
