@@ -38,11 +38,11 @@ async def lifespan(app: FastAPI):
     
     if settings.ensp_logger_enabled:
         try:
-            ensp_logger_service.start()
+            await ensp_logger_service.async_start()
             if ensp_logger_service.is_running:
-                logger.info("ENSP logger service started")
+                logger.info(f"ENSP logger service started (mode: {ensp_logger_service.capture_mode})")
             else:
-                logger.warning("ENSP logger service failed to start (may require admin privileges)")
+                logger.warning("ENSP logger service failed to start")
         except Exception as e:
             logger.warning(f"Failed to start ENSP logger service: {e}")
             logger.warning("Continuing without packet capture - log monitoring will work with existing logs")
@@ -58,7 +58,7 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down AIDEN Labs...")
     
     if ensp_logger_service.is_running:
-        ensp_logger_service.stop()
+        await ensp_logger_service.async_stop()
     
     log_watcher.stop()
     
