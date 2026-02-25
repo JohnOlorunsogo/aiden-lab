@@ -2,16 +2,16 @@ import { useState, useEffect, useCallback } from 'react';
 import { BrowserRouter, Routes, Route, NavLink, useLocation } from 'react-router-dom';
 import { fetchErrors, fetchActiveErrors, fetchStats, fetchHealth, dismissError, dismissAllErrors, WebSocketManager } from './services/api';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  LayoutDashboard, 
-  History, 
-  Settings, 
-  Clipboard, 
-  AlertTriangle, 
-  Monitor, 
-  FileText, 
-  Activity, 
-  X, 
+import {
+  LayoutDashboard,
+  History,
+  Settings,
+  Clipboard,
+  AlertTriangle,
+  Monitor,
+  FileText,
+  Activity,
+  X,
   CheckCircle,
   Terminal,
   Server,
@@ -23,10 +23,7 @@ import {
   Sparkles,
   Shield
 } from 'lucide-react';
-import AdminLayout from './pages/admin/AdminLayout';
-import AdminDashboard from './pages/admin/AdminDashboard';
-import CreateVMPage from './pages/admin/CreateVMPage';
-import VMDetailsPage from './pages/admin/VMDetailsPage';
+
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -150,7 +147,7 @@ function FormattedContent({ text }) {
 
 function MobileNav({ isOpen, onClose, isConnected }) {
   const location = useLocation();
-  
+
   useEffect(() => {
     onClose();
   }, [location.pathname, onClose]);
@@ -175,9 +172,9 @@ function MobileNav({ isOpen, onClose, isConnected }) {
           >
             <div className="flex flex-col h-full p-6">
               <div className="flex items-center justify-between mb-8">
-                <img 
-                  src="/Aiden lab Assets (Png & SVG)/White/Asset 9.svg" 
-                  alt="AIDEN Labs" 
+                <img
+                  src="/Aiden lab Assets (Png & SVG)/White/Asset 9.svg"
+                  alt="AIDEN Labs"
                   className="h-6 w-auto"
                 />
                 <Button variant="ghost" size="icon" onClick={onClose} className="text-[#bdccd4]/60">
@@ -188,8 +185,8 @@ function MobileNav({ isOpen, onClose, isConnected }) {
               <nav className="flex flex-col gap-1 flex-1">
                 <NavLink to="/" className={({ isActive }) => cn(
                   'flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200',
-                  isActive 
-                    ? 'bg-[#24ab94]/10 text-[#24ab94]' 
+                  isActive
+                    ? 'bg-[#24ab94]/10 text-[#24ab94]'
                     : 'text-[#bdccd4]/60 hover:bg-[#bdccd4]/5 hover:text-[#bdccd4]'
                 )}>
                   <LayoutDashboard className="w-5 h-5" />
@@ -197,26 +194,17 @@ function MobileNav({ isOpen, onClose, isConnected }) {
                 </NavLink>
                 <NavLink to="/history" className={({ isActive }) => cn(
                   'flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200',
-                  isActive 
-                    ? 'bg-[#24ab94]/10 text-[#24ab94]' 
+                  isActive
+                    ? 'bg-[#24ab94]/10 text-[#24ab94]'
                     : 'text-[#bdccd4]/60 hover:bg-[#bdccd4]/5 hover:text-[#bdccd4]'
                 )}>
                   <History className="w-5 h-5" />
                   <span>History</span>
                 </NavLink>
-                <NavLink to="/admin" className={({ isActive }) => cn(
-                  'flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200',
-                  isActive 
-                    ? 'bg-[#24ab94]/10 text-[#24ab94]' 
-                    : 'text-[#bdccd4]/60 hover:bg-[#bdccd4]/5 hover:text-[#bdccd4]'
-                )}>
-                  <Server className="w-5 h-5" />
-                  <span>VM Admin</span>
-                </NavLink>
                 <NavLink to="/settings" className={({ isActive }) => cn(
                   'flex items-center gap-3 px-4 py-3 text-sm font-medium rounded-lg transition-all duration-200',
-                  isActive 
-                    ? 'bg-[#24ab94]/10 text-[#24ab94]' 
+                  isActive
+                    ? 'bg-[#24ab94]/10 text-[#24ab94]'
                     : 'text-[#bdccd4]/60 hover:bg-[#bdccd4]/5 hover:text-[#bdccd4]'
                 )}>
                   <Settings className="w-5 h-5" />
@@ -243,12 +231,12 @@ function Sidebar({ isConnected }) {
     <aside className="fixed top-0 left-0 bottom-0 w-[280px] border-r border-[#bdccd4]/10 flex-col z-50 hidden md:flex">
       <div className="sidebar-pattern opacity-[0.03]" />
       <div className="absolute inset-0 bg-[#020725]/80 backdrop-blur-xl" />
-      
+
       <div className="relative z-10 flex flex-col h-full">
         <div className="flex items-center gap-3 mb-10 px-6 pt-6">
-          <img 
-            src="/Aiden lab Assets (Png & SVG)/White/Asset 9.svg" 
-            alt="AIDEN Labs" 
+          <img
+            src="/Aiden lab Assets (Png & SVG)/White/Asset 9.svg"
+            alt="AIDEN Labs"
             className="h-6 w-auto"
           />
         </div>
@@ -262,8 +250,8 @@ function Sidebar({ isConnected }) {
         <nav className="flex flex-col gap-1 flex-1 px-3">
           <NavLink to="/" className={({ isActive }) => cn(
             'flex items-center gap-3 px-4 py-3 text-[13px] font-medium rounded-lg transition-all duration-200 group relative',
-            isActive 
-              ? 'text-[#24ab94]' 
+            isActive
+              ? 'text-[#24ab94]'
               : 'text-[#bdccd4]/60 hover:text-[#bdccd4]'
           )}>
             {({ isActive }) => (
@@ -282,8 +270,8 @@ function Sidebar({ isConnected }) {
           </NavLink>
           <NavLink to="/history" className={({ isActive }) => cn(
             'flex items-center gap-3 px-4 py-3 text-[13px] font-medium rounded-lg transition-all duration-200 group relative',
-            isActive 
-              ? 'text-[#24ab94]' 
+            isActive
+              ? 'text-[#24ab94]'
               : 'text-[#bdccd4]/60 hover:text-[#bdccd4]'
           )}>
             {({ isActive }) => (
@@ -300,30 +288,10 @@ function Sidebar({ isConnected }) {
               </>
             )}
           </NavLink>
-          <NavLink to="/admin" className={({ isActive }) => cn(
-            'flex items-center gap-3 px-4 py-3 text-[13px] font-medium rounded-lg transition-all duration-200 group relative',
-            isActive 
-              ? 'text-[#24ab94]' 
-              : 'text-[#bdccd4]/60 hover:text-[#bdccd4]'
-          )}>
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <motion.div
-                    layoutId="sidebar-active-main"
-                    className="absolute inset-0 bg-[#24ab94]/10 rounded-lg"
-                    transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
-                  />
-                )}
-                <Server className={cn('w-4 h-4 relative z-10', !isActive && 'group-hover:scale-110 transition-transform')} />
-                <span className="relative z-10">VM Admin</span>
-              </>
-            )}
-          </NavLink>
           <NavLink to="/settings" className={({ isActive }) => cn(
             'flex items-center gap-3 px-4 py-3 text-[13px] font-medium rounded-lg transition-all duration-200 group relative',
-            isActive 
-              ? 'text-[#24ab94]' 
+            isActive
+              ? 'text-[#24ab94]'
               : 'text-[#bdccd4]/60 hover:text-[#bdccd4]'
           )}>
             {({ isActive }) => (
@@ -355,34 +323,34 @@ function Sidebar({ isConnected }) {
 
 function StatsGrid({ stats }) {
   const statsData = [
-    { 
-      label: 'Total Errors', 
-      value: stats.total_errors || 0, 
-      icon: AlertTriangle, 
+    {
+      label: 'Total Errors',
+      value: stats.total_errors || 0,
+      icon: AlertTriangle,
       color: 'red',
       trend: stats.total_errors > 0 ? -5 : 0,
       trendUp: false
     },
-    { 
-      label: 'Devices Monitored', 
-      value: stats.devices_count || 0, 
-      icon: Monitor, 
+    {
+      label: 'Devices Monitored',
+      value: stats.devices_count || 0,
+      icon: Monitor,
       color: 'blue',
       trend: 12,
       trendUp: true
     },
-    { 
-      label: 'Active Log Files', 
-      value: stats.watched_files?.length || 0, 
-      icon: FileText, 
+    {
+      label: 'Active Log Files',
+      value: stats.watched_files?.length || 0,
+      icon: FileText,
       color: 'amber',
       trend: 8,
       trendUp: true
     },
-    { 
-      label: 'Watcher Status', 
-      value: stats.watcher_running ? 'Active' : 'Inactive', 
-      icon: Activity, 
+    {
+      label: 'Watcher Status',
+      value: stats.watcher_running ? 'Active' : 'Inactive',
+      icon: Activity,
       color: stats.watcher_running ? 'teal' : 'red',
       isStatus: true
     }
@@ -410,18 +378,18 @@ function ErrorCard({ error, solution, isNew, onDismiss, showDismiss = true }) {
   const [expanded, setExpanded] = useState(false);
 
   const severityConfig = {
-    critical: { 
-      border: 'border-l-red-500', 
+    critical: {
+      border: 'border-l-red-500',
       badge: 'destructive',
       bg: 'from-red-500/5 to-transparent'
     },
-    warning: { 
-      border: 'border-l-amber-500', 
+    warning: {
+      border: 'border-l-amber-500',
       badge: 'warning',
       bg: 'from-amber-500/5 to-transparent'
     },
-    info: { 
-      border: 'border-l-[#24ab94]', 
+    info: {
+      border: 'border-l-[#24ab94]',
       badge: 'secondary',
       bg: 'from-[#24ab94]/5 to-transparent'
     }
@@ -444,7 +412,7 @@ function ErrorCard({ error, solution, isNew, onDismiss, showDismiss = true }) {
       )}
     >
       <div className={cn('absolute inset-0 bg-gradient-to-br opacity-30', config.bg)} />
-      
+
       <div className="relative p-6">
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3 flex-wrap">
@@ -458,10 +426,10 @@ function ErrorCard({ error, solution, isNew, onDismiss, showDismiss = true }) {
               {new Date(error.timestamp).toLocaleString()}
             </span>
             {showDismiss && onDismiss && (
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                className="h-8 w-8 text-[#bdccd4]/40 hover:text-red-400 hover:bg-red-500/10" 
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-[#bdccd4]/40 hover:text-red-400 hover:bg-red-500/10"
                 onClick={() => onDismiss(error.id)}
               >
                 <X className="h-4 w-4" />
@@ -526,9 +494,9 @@ function ErrorCard({ error, solution, isNew, onDismiss, showDismiss = true }) {
                 </motion.div>
               )}
             </AnimatePresence>
-            <Button 
-              variant="ghost" 
-              size="sm" 
+            <Button
+              variant="ghost"
+              size="sm"
               onClick={() => setExpanded(!expanded)}
               className="text-[#24ab94] hover:text-[#24ab94] hover:bg-[#24ab94]/10 text-xs uppercase tracking-wider"
             >
@@ -555,7 +523,7 @@ function ErrorCard({ error, solution, isNew, onDismiss, showDismiss = true }) {
 function ErrorList({ errors, newErrorIds, onDismiss, showDismiss = true }) {
   if (errors.length === 0) {
     return (
-      <motion.div 
+      <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         className="text-center py-20"
@@ -591,7 +559,7 @@ function Dashboard({ errors, stats, newErrorIds, onDismiss, onDismissAll }) {
   return (
     <div>
       <div className="relative -mx-4 md:-mx-8 -mt-4 md:-mt-8 mb-8 px-4 md:px-8 pt-6 md:pt-8 pb-10 overflow-hidden">
-        <div 
+        <div
           className="absolute inset-0 bg-[#020725]"
           style={{
             backgroundImage: `url('/Aiden lab Assets (Png & SVG)/Patterns/Asset 18.svg')`,
@@ -602,7 +570,7 @@ function Dashboard({ errors, stats, newErrorIds, onDismiss, onDismissAll }) {
         />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#020725]/50 to-[#020725]" />
         <div className="absolute inset-0 bg-gradient-to-r from-[#24ab94]/5 via-transparent to-[#24ab94]/5" />
-        
+
         <div className="relative z-10">
           <motion.div
             initial={{ opacity: 0, y: -20 }}
@@ -611,7 +579,7 @@ function Dashboard({ errors, stats, newErrorIds, onDismiss, onDismissAll }) {
             <h1 className="text-2xl md:text-3xl font-bold text-[#bdccd4] mb-2 font-notch">Dashboard</h1>
             <p className="text-[#bdccd4]/50 text-sm">Build Better Networks. Guided by AI.</p>
           </motion.div>
-          
+
           {errors.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -619,8 +587,8 @@ function Dashboard({ errors, stats, newErrorIds, onDismiss, onDismissAll }) {
               transition={{ delay: 0.2 }}
               className="mt-6"
             >
-              <Button 
-                variant="ghost" 
+              <Button
+                variant="ghost"
                 onClick={onDismissAll}
                 className="text-[#bdccd4]/60 hover:text-red-400 hover:bg-red-500/10 border border-[#bdccd4]/10"
               >
@@ -633,7 +601,7 @@ function Dashboard({ errors, stats, newErrorIds, onDismiss, onDismissAll }) {
       </div>
 
       <StatsGrid stats={stats} />
-      
+
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
@@ -679,7 +647,7 @@ function HistoryPage() {
   return (
     <div>
       <div className="relative -mx-4 md:-mx-8 -mt-4 md:-mt-8 mb-8 px-4 md:px-8 pt-6 md:pt-8 pb-10 overflow-hidden">
-        <div 
+        <div
           className="absolute inset-0 bg-[#020725]"
           style={{
             backgroundImage: `url('/Aiden lab Assets (Png & SVG)/Patterns/Asset 18.svg')`,
@@ -689,16 +657,16 @@ function HistoryPage() {
           }}
         />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#020725]/50 to-[#020725]" />
-        
+
         <div className="relative z-10">
-          <motion.h1 
+          <motion.h1
             className="text-2xl md:text-3xl font-bold text-[#bdccd4] mb-2 font-notch"
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
           >
             Error History
           </motion.h1>
-          <motion.p 
+          <motion.p
             className="text-[#bdccd4]/50 text-sm"
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -710,24 +678,24 @@ function HistoryPage() {
       </div>
 
       <ErrorList errors={errors} newErrorIds={new Set()} showDismiss={false} />
-      
-      <motion.div 
+
+      <motion.div
         className="mt-8 flex gap-4 justify-center"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.2 }}
       >
-        <Button 
-          variant="ghost" 
-          onClick={() => setPage(p => Math.max(1, p - 1))} 
+        <Button
+          variant="ghost"
+          onClick={() => setPage(p => Math.max(1, p - 1))}
           disabled={page === 1}
           className="text-[#bdccd4]/60 hover:text-[#24ab94] hover:bg-[#24ab94]/10"
         >
           Previous
         </Button>
         <span className="py-2 px-3 text-[#bdccd4]/40 text-sm font-mono">Page {page}</span>
-        <Button 
-          variant="ghost" 
+        <Button
+          variant="ghost"
           onClick={() => setPage(p => p + 1)}
           className="text-[#bdccd4]/60 hover:text-[#24ab94] hover:bg-[#24ab94]/10"
         >
@@ -757,7 +725,7 @@ function SettingsPage() {
   return (
     <div>
       <div className="relative -mx-4 md:-mx-8 -mt-4 md:-mt-8 mb-8 px-4 md:px-8 pt-6 md:pt-8 pb-10 overflow-hidden">
-        <div 
+        <div
           className="absolute inset-0 bg-[#020725]"
           style={{
             backgroundImage: `url('/Aiden lab Assets (Png & SVG)/Patterns/Asset 18.svg')`,
@@ -767,16 +735,16 @@ function SettingsPage() {
           }}
         />
         <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[#020725]/50 to-[#020725]" />
-        
+
         <div className="relative z-10">
-          <motion.h1 
+          <motion.h1
             className="text-2xl md:text-3xl font-bold text-[#bdccd4] mb-2 font-notch"
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
           >
             Settings
           </motion.h1>
-          <motion.p 
+          <motion.p
             className="text-[#bdccd4]/50 text-sm"
             initial={{ opacity: 0, x: -20 }}
             animate={{ opacity: 1, x: 0 }}
@@ -894,9 +862,9 @@ function Header({ isConnected, onMenuClick }) {
   return (
     <header className="md:hidden flex items-center justify-between p-4 bg-[#020725]/80 backdrop-blur-md border-b border-[#bdccd4]/10 sticky top-0 z-30">
       <div className="flex items-center gap-3">
-        <img 
-          src="/Aiden lab Assets (Png & SVG)/White/Asset 9.svg" 
-          alt="AIDEN Labs" 
+        <img
+          src="/Aiden lab Assets (Png & SVG)/White/Asset 9.svg"
+          alt="AIDEN Labs"
           className="h-5 w-auto"
         />
       </div>
@@ -1021,10 +989,10 @@ function App() {
       <div className="flex min-h-screen bg-[#010311]">
         <Sidebar isConnected={isConnected} />
         <MobileNav isOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} isConnected={isConnected} />
-        
+
         <div className="flex-1 flex flex-col md:ml-[280px]">
           <Header isConnected={isConnected} onMenuClick={() => setMobileNavOpen(true)} />
-          
+
           <main className="flex-1 p-4 md:p-8 min-h-screen">
             <Routes>
               <Route path="/" element={
@@ -1037,17 +1005,13 @@ function App() {
                 />
               } />
               <Route path="/history" element={<HistoryPage />} />
-              <Route path="/admin" element={<AdminLayout />}>
-                <Route index element={<AdminDashboard />} />
-                <Route path="vms/new" element={<CreateVMPage />} />
-                <Route path="vms/:id" element={<VMDetailsPage />} />
-              </Route>
+
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           </main>
         </div>
       </div>
-      <Toaster 
+      <Toaster
         position="bottom-right"
         toastOptions={{
           style: {

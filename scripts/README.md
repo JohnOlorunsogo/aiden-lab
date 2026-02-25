@@ -54,11 +54,11 @@ Once running, access the services at:
 ## Requirements
 
 - **Backend:** Python 3.x with dependencies installed
-- **Frontend:** Node.js and npm with dependencies installed
+- **Frontend:** Bun installed
 
 ## Notes
 
 - The scripts automatically detect and activate the Python virtual environment if present
-- Frontend will auto-install npm dependencies if `node_modules` is missing
+- Frontend will auto-install bun dependencies if `node_modules` is missing
 - On Windows, each service runs in its own terminal window
 - On Linux/macOS, both services run in the same terminal with combined output
