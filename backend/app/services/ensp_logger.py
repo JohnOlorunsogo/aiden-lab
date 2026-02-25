@@ -300,7 +300,6 @@ class SessionLogger:
 
             hostname = matches[0].strip()
             excluded = [
-                "huawei",
                 "system",
                 "config",
                 "user",
@@ -479,6 +478,21 @@ class ENSPPacketSniffer:
             elif sport in self.console_ports:
                 port = sport
                 direction = INCOMING
+            elif self.auto_detect:
+                # Auto-detect: if either port is in the expected range, add it
+                min_p = min(self.console_ports) if self.console_ports else 2000
+                max_p = max(self.console_ports) if self.console_ports else 2020
+                if min_p <= dport <= max_p:
+                    self.console_ports.add(dport)
+                    port = dport
+                    direction = OUTGOING
+                    logger.info(f"Auto-detected new console port: {dport}")
+                elif min_p <= sport <= max_p:
+                    self.console_ports.add(sport)
+                    port = sport
+                    direction = INCOMING
+                    logger.info(f"Auto-detected new console port: {sport}")
+
             if port is None or direction is None:
                 return
 
@@ -486,11 +500,11 @@ class ENSPPacketSniffer:
             if not raw_payload:
                 return
 
-            stream_key = (port, sport, dport, direction)
-            seq = int(getattr(tcp, "seq", 0))
-            payload = self._reassemble_payload(stream_key, seq, raw_payload)
-            if payload and self.session_logger:
-                self.session_logger.write(port, direction, payload)
+            # Pass raw payload directly to the session logger.
+            # TCP reassembly is skipped — on loopback, packets arrive in order
+            # and the reassembly logic was silently dropping response data.
+            if self.session_logger:
+                self.session_logger.write(port, direction, raw_payload)
         except Exception as exc:
             logger.error(f"Error processing packet: {exc}")
 
