@@ -91,10 +91,6 @@ class Settings(BaseSettings):
     
     host: str = Field(default="0.0.0.0", description="Server host")
     port: int = Field(default=8000, description="Server port")
-    log_line_pattern: str = Field(
-        default=r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+([←→])\s+'(.+)'",
-        description="Regex pattern to parse log lines"
-    )
     
     @field_validator('log_watch_dir', mode='before')
     @classmethod

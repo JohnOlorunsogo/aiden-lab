@@ -47,12 +47,22 @@ class TestLogParser:
         assert "\x1b" not in cleaned
         assert "\r" not in cleaned
     
-    def test_clean_content_removes_doubles(self):
-        """Test doubled character removal."""
+    def test_clean_content_preserves_repeated_chars(self):
+        """Echo-double removal is handled at write time by SessionLogger, not parser.
+        Parser should preserve content as-is to avoid corrupting valid text."""
         content = "ddiissppllaayy"
         cleaned = LogParser.clean_content(content)
+        # Parser no longer strips doubles — SessionLogger does it at write time
+        assert cleaned == "ddiissppllaayy"
+    
+    def test_parse_hyphenated_device_name(self):
+        """Test parsing log lines with hyphenated device names like Router-1."""
+        raw = "[2026-01-18 03:10:25] [Router-1] ← '<Router-1>'"
+        result = LogParser.parse_line(raw)
         
-        assert cleaned == "display"
+        assert result is not None
+        assert result.device_id == "Router-1"
+        assert result.direction == "in"
     
     def test_deduplicate(self):
         """Test line deduplication."""

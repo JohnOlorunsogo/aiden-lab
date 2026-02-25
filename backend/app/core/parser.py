@@ -12,13 +12,14 @@ class LogParser:
     """Parser for Huawei ENSP telnet log format with flexible fallback."""
     
     # Pattern: [2026-01-18 03:10:25] [device_2000] ← 'content\r'
+    # Device names may contain word chars and hyphens (e.g. Router-1, SW_Core)
     LOG_LINE_PATTERN = re.compile(
-        r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+([←→])\s+'(.*)'"
+        r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+\[([\w-]+)\]\s+([←→])\s+'(.*)'"
     )
     
     # Simplified pattern: [timestamp] [device] content (without direction/quotes)
     SIMPLE_PATTERN = re.compile(
-        r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+\[(\w+)\]\s+(.*)"
+        r"\[(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\]\s+\[([\w-]+)\]\s+(.*)"
     )
     
     # Generic timestamp pattern for any log format
@@ -93,9 +94,9 @@ class LogParser:
         
         # Extract device from content if mentioned (e.g., "Router1:", "R1>", etc.)
         device_patterns = [
-            r'\[(\w+)\]',           # [DeviceName]
-            r'<(\w+)>',             # <DeviceName>
-            r'(\w+)[>#:]',          # DeviceName> or DeviceName#
+            r'\[([\w-]+)\]',              # [DeviceName] or [Device-1]
+            r'<([\w-]+)>',                # <DeviceName> or <Device-1>
+            r'^([A-Za-z][\w-]*)(?=[>#])',  # DeviceName> or DeviceName# (at start of line)
         ]
         for pattern in device_patterns:
             dev_match = re.search(pattern, stripped)
@@ -131,33 +132,12 @@ class LogParser:
         # Remove trailing \r
         cleaned = cleaned.rstrip('\r')
         
-        # Handle doubled characters from terminal echo (common in telnet)
-        # This is a simplistic approach - may need refinement
-        cleaned = cls._remove_echo_doubles(cleaned)
+        # Note: echo-double removal is handled at write time by SessionLogger._clean_console_text.
+        # Applying it again here would risk corrupting valid content with repeated characters.
         
         return cleaned.strip()
     
-    @classmethod
-    def _remove_echo_doubles(cls, text: str) -> str:
-        """
-        Remove doubled characters that result from terminal echo.
-        Example: 'ddiissppllaayy' -> 'display'
-        """
-        if len(text) < 2:
-            return text
-        
-        # Check if text appears to be doubled
-        result = []
-        i = 0
-        while i < len(text):
-            if i + 1 < len(text) and text[i] == text[i + 1]:
-                result.append(text[i])
-                i += 2
-            else:
-                # Not doubled - return original
-                return text
-        
-        return ''.join(result)
+
     
     @classmethod
     def parse_file(cls, content: str) -> List[LogLine]:
