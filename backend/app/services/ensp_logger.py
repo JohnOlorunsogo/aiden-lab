@@ -168,14 +168,7 @@ class SessionLogger:
         cleaned = CONTROL_CHARS_RE.sub("", cleaned)
         cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
         cleaned = cleaned.strip()
-
-        # Fix exact full-line duplication (common with packet overlap artefacts).
-        if len(cleaned) >= 2 and len(cleaned) % 2 == 0:
-            half = len(cleaned) // 2
-            if cleaned[:half] == cleaned[half:]:
-                cleaned = cleaned[:half]
-
-        return re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
 
     @staticmethod
     def _normalize_echo(text: str) -> str:
@@ -261,12 +254,16 @@ class SessionLogger:
                     if cleaned_text.strip() == last_cmd.strip():
                         return
 
-        if cleaned_text == last_line:
-            if self._is_prompt_line(cleaned_text):
-                self.duplicate_prompt_count[key] = self.duplicate_prompt_count.get(key, 0) + 1
-                if self.duplicate_prompt_count[key] > 1:
-                    return
-            else:
+        # For OUTGOING (commands), suppress exact consecutive duplicates.
+        # For INCOMING (responses), allow everything through — responses may
+        # legitimately repeat (e.g. repeated status lines, table separators).
+        if direction == OUTGOING and cleaned_text == last_line:
+            return
+
+        # For both directions, deduplicate consecutive identical prompts.
+        if self._is_prompt_line(cleaned_text) and cleaned_text == last_line:
+            self.duplicate_prompt_count[key] = self.duplicate_prompt_count.get(key, 0) + 1
+            if self.duplicate_prompt_count[key] > 1:
                 return
         else:
             self.duplicate_prompt_count[key] = 0

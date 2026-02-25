@@ -59,8 +59,8 @@ class Settings(BaseSettings):
         description="Enable/disable ENSP packet sniffer"
     )
     ensp_capture_mode: str = Field(
-        default="proxy",
-        description="Capture mode: 'proxy' (Telnet proxy, recommended) or 'sniffer' (passive packet capture)"
+        default="sniffer",
+        description="Capture mode: 'sniffer' (passive packet capture, default) or 'proxy' (Telnet proxy)"
     )
     ensp_proxy_port_offset: int = Field(
         default=1000,
