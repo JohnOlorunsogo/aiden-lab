@@ -1,8 +1,10 @@
 """eNSP Console Logger - Passive packet capture using Scapy."""
 import datetime
 import logging
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Set, Optional
+from typing import Dict, Optional, Set, Tuple
 
 try:
     from scapy.all import AsyncSniffer, Raw, get_if_list  # type: ignore
@@ -15,11 +17,47 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-TELNET_CTRL_MIN = 240
+OUTGOING = "→"
+INCOMING = "←"
+
+TELNET_IAC = 255
+TELNET_SE = 240
+TELNET_SB = 250
+TELNET_WILL = 251
+TELNET_WONT = 252
+TELNET_DO = 253
+TELNET_DONT = 254
+
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+# If capture drops packets, avoid getting stuck waiting forever.
+MAX_GAP_BYTES = 8192
+GAP_TIMEOUT_SEC = 1.0
+
+
+@dataclass
+class TelnetDecodeState:
+    """Tracks incremental Telnet parsing state across packet boundaries."""
+
+    pending_iac: bool = False
+    pending_option_for: Optional[int] = None
+    in_subnegotiation: bool = False
+    subnegotiation_iac: bool = False
+
+
+@dataclass
+class TcpStreamState:
+    """Maintains stream-level TCP reassembly state for one direction."""
+
+    next_seq: Optional[int] = None
+    pending: Dict[int, bytes] = field(default_factory=dict)
+    last_seen: float = field(default_factory=datetime.datetime.now().timestamp)
+    gap_since: Optional[float] = None
 
 
 class SessionLogger:
-    """Manages log files for each eNSP console port with text cleaning."""
+    """Manages log files for each eNSP console port with stream-safe text cleaning."""
 
     def __init__(self, log_dir: Path):
         self.log_dir = log_dir
@@ -28,10 +66,10 @@ class SessionLogger:
         self.device_names: Dict[int, str] = {}
         self.input_buffers: Dict[int, str] = {}
         self.output_buffers: Dict[int, str] = {}
-        # Track last logged lines for deduplication
-        self.last_lines: Dict[int, str] = {}
-        # Track consecutive duplicate prompts
-        self.duplicate_prompt_count: Dict[int, int] = {}
+        self.last_lines: Dict[Tuple[int, str], str] = {}
+        self.duplicate_prompt_count: Dict[Tuple[int, str], int] = {}
+        self.telnet_states: Dict[Tuple[int, str], TelnetDecodeState] = {}
+        self.last_outgoing: Dict[int, Tuple[str, float]] = {}
 
     def _open(self, port: int):
         if port in self.handles:
@@ -48,18 +86,137 @@ class SessionLogger:
             logger.error(f"Error creating log file for port {port}: {exc}")
             raise
 
+    def _strip_telnet_controls(self, key: Tuple[int, str], data: bytes) -> bytes:
+        """Parse Telnet IAC control sequences and emit printable payload bytes only."""
+        state = self.telnet_states.setdefault(key, TelnetDecodeState())
+        out = bytearray()
+        i = 0
+
+        while i < len(data):
+            b = data[i]
+
+            if state.in_subnegotiation:
+                if state.subnegotiation_iac:
+                    if b == TELNET_SE:
+                        state.in_subnegotiation = False
+                    state.subnegotiation_iac = False
+                    i += 1
+                    continue
+                if b == TELNET_IAC:
+                    state.subnegotiation_iac = True
+                i += 1
+                continue
+
+            if state.pending_option_for is not None:
+                # Consume option byte for IAC WILL/WONT/DO/DONT/SB.
+                if state.pending_option_for == TELNET_SB:
+                    state.in_subnegotiation = True
+                    state.subnegotiation_iac = False
+                state.pending_option_for = None
+                i += 1
+                continue
+
+            if state.pending_iac:
+                state.pending_iac = False
+                if b == TELNET_IAC:
+                    out.append(TELNET_IAC)
+                elif b in (TELNET_WILL, TELNET_WONT, TELNET_DO, TELNET_DONT, TELNET_SB):
+                    state.pending_option_for = b
+                # Other IAC commands are intentionally ignored.
+                i += 1
+                continue
+
+            if b == TELNET_IAC:
+                state.pending_iac = True
+                i += 1
+                continue
+
+            out.append(b)
+            i += 1
+
+        return bytes(out)
+
+    @staticmethod
+    def _apply_backspaces(text: str) -> str:
+        """Apply terminal backspace/delete semantics to a text fragment."""
+        out = []
+        for ch in text:
+            if ch in ("\b", "\x7f"):
+                if out and out[-1] not in ("\n", "\r"):
+                    out.pop()
+                continue
+            if ch == "\x00":
+                continue
+            out.append(ch)
+        return "".join(out)
+
+    @staticmethod
+    def _is_prompt_line(s: str) -> bool:
+        s = s.strip()
+        return (
+            (s.startswith("<") and s.endswith(">"))
+            or (s.startswith("[") and s.endswith("]"))
+            or s.endswith("#")
+            or s.endswith(">")
+        )
+
+    @staticmethod
+    def _clean_console_text(text: str) -> str:
+        """Normalize one logical console line without command-specific rewriting."""
+        cleaned = ANSI_ESCAPE_RE.sub("", text)
+        cleaned = cleaned.replace("\x07", "")
+        cleaned = CONTROL_CHARS_RE.sub("", cleaned)
+        cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+        cleaned = cleaned.strip()
+
+        # Fix exact full-line duplication (common with packet overlap artefacts).
+        if len(cleaned) >= 2 and len(cleaned) % 2 == 0:
+            half = len(cleaned) // 2
+            if cleaned[:half] == cleaned[half:]:
+                cleaned = cleaned[:half]
+
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    @staticmethod
+    def _normalize_echo(text: str) -> str:
+        """Normalize potential echo lines to compare with recent outgoing commands."""
+        if not text:
+            return ""
+
+        if len(text) >= 2 and len(text) % 2 == 0:
+            is_pair_doubled = True
+            out = []
+            for i in range(0, len(text), 2):
+                if text[i] != text[i + 1]:
+                    is_pair_doubled = False
+                    break
+                out.append(text[i])
+            if is_pair_doubled:
+                text = "".join(out)
+
+        collapsed = []
+        prev = None
+        for ch in text:
+            if ch == prev:
+                continue
+            collapsed.append(ch)
+            prev = ch
+        return "".join(collapsed)
+
     def write(self, port: int, direction: str, data: bytes):
-        cleaned = bytes(b for b in data if b < TELNET_CTRL_MIN)
-        if not cleaned:
+        key = (port, direction)
+        payload = self._strip_telnet_controls(key, data)
+        if not payload:
             return
-        try:
-            text = cleaned.decode("utf-8", errors="replace")
-        except Exception:
-            text = cleaned.decode("latin-1", errors="replace")
+
+        text = payload.decode("utf-8", errors="replace")
+        if not text:
+            return
+        text = self._apply_backspaces(text)
         if not text:
             return
 
-        buffer_name = "input_buffers" if direction == "→" else "output_buffers"
+        buffer_name = "input_buffers" if direction == OUTGOING else "output_buffers"
         buffers: Dict[int, str] = getattr(self, buffer_name)
         buffers[port] = buffers.get(port, "") + text
 
@@ -79,114 +236,43 @@ class SessionLogger:
             if line.strip():
                 self._log_line(port, direction, line)
 
-        if direction == "←" and buffers[port]:
+        if direction == INCOMING and buffers[port]:
             frag = buffers[port].strip()
-            if frag.endswith((">", "]")) or (frag.startswith("<") and frag.endswith(">")):
+            if self._is_prompt_line(frag):
                 self._log_line(port, direction, frag)
                 buffers[port] = ""
 
     def _log_line(self, port: int, direction: str, text: str):
-        def is_prompt_line(s: str) -> bool:
-            """Check if line is a router prompt."""
-            s = s.strip()
-            return (s.startswith('<') and s.endswith('>')) or \
-                   (s.startswith('[') and s.endswith(']')) or \
-                   s.endswith('#') or s.endswith('>')
-
-        def should_skip_line(port: int, clean_line: str) -> bool:
-            """Skip duplicate lines and excessive prompts."""
-            if not clean_line or clean_line.isspace():
-                return True
-            
-            last_line = self.last_lines.get(port, "")
-            if clean_line == last_line:
-                return True
-            
-            # Limit consecutive duplicate prompts
-            if is_prompt_line(clean_line):
-                if clean_line == last_line:
-                    self.duplicate_prompt_count[port] = self.duplicate_prompt_count.get(port, 0) + 1
-                    if self.duplicate_prompt_count[port] > 1:
-                        return True
-                else:
-                    self.duplicate_prompt_count[port] = 0
-            else:
-                self.duplicate_prompt_count[port] = 0
-            
-            return False
-
-        def clean_console_text(text: str, direction: str) -> str:
-            """Clean eNSP console artifacts and character doubling."""
-            import re
-            
-            if not text or not text.strip():
-                return ""
-            
-            # Remove control characters and ANSI sequences
-            cleaned = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', text)
-            cleaned = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]', '', cleaned)
-            cleaned = cleaned.replace('\x07', '')
-            cleaned = cleaned.replace('\r\n', '\n').replace('\r', '\n')
-            cleaned = cleaned.strip()
-            
-            # Fix command input issues (user typed commands)
-            if direction == "→":
-                # Handle character doubling in commands like "hehello" -> "hello"
-                if "hello" in cleaned.lower():
-                    match = re.search(r'h[eh]*ello', cleaned.lower())
-                    if match and len(match.group()) > 5:
-                        cleaned = cleaned.replace(match.group(), "hello")
-                
-                # Fix other doubled commands
-                command_patterns = {
-                    r'd[di]*splay': 'display',
-                    r's[sh]*ow': 'show', 
-                    r'p[pi]*ng': 'ping',
-                    r't[te]*st': 'test'
-                }
-                
-                for pattern, replacement in command_patterns.items():
-                    if re.search(pattern, cleaned.lower()):
-                        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
-            
-            # Fix router response issues
-            elif direction == "←":
-                # Handle corrupted error messages
-                if 'ee' in cleaned and ('error' in cleaned.lower() or 'unrecognized' in cleaned.lower()):
-                    if 'unrecognized command' in cleaned.lower():
-                        cleaned = "Error: Unrecognized command found at '^' position."
-                
-                # Remove repetitive error text
-                if '.or:' in cleaned or 'position.or:' in cleaned:
-                    parts = cleaned.split('or:')
-                    if len(parts) > 1:
-                        first_part = parts[0].strip()
-                        cleaned = first_part + "." if not first_part.endswith('.') else first_part
-            
-            # Remove duplicate consecutive words
-            words = cleaned.split()
-            if len(words) >= 2:
-                filtered = []
-                prev = None
-                for word in words:
-                    if word.lower() != prev:
-                        filtered.append(word)
-                        prev = word.lower()
-                cleaned = ' '.join(filtered)
-            
-            return re.sub(r'\s+', ' ', cleaned).strip()
-
-        # Process the log line
-        cleaned_text = clean_console_text(text, direction)
-        
-        if should_skip_line(port, cleaned_text):
+        cleaned_text = self._clean_console_text(text)
+        if not cleaned_text or cleaned_text.isspace():
             return
-        
-        self.last_lines[port] = cleaned_text
+
+        key = (port, direction)
+        last_line = self.last_lines.get(key, "")
+
+        # Suppress incoming echo lines that match recent outgoing commands.
+        if direction == INCOMING and len(cleaned_text) <= 64:
+            last_out = self.last_outgoing.get(port)
+            if last_out:
+                last_cmd, ts = last_out
+                if (datetime.datetime.now().timestamp() - ts) <= 2.0:
+                    if self._normalize_echo(cleaned_text) == self._normalize_echo(last_cmd):
+                        return
+
+        if cleaned_text == last_line:
+            if self._is_prompt_line(cleaned_text):
+                self.duplicate_prompt_count[key] = self.duplicate_prompt_count.get(key, 0) + 1
+                if self.duplicate_prompt_count[key] > 1:
+                    return
+            else:
+                return
+        else:
+            self.duplicate_prompt_count[key] = 0
+
+        self.last_lines[key] = cleaned_text
         self._detect_device_name(port, direction, cleaned_text)
         self._open(port)
 
-        # Write to log file
         ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         device_name = self.device_names.get(port, f"device_{port}")
         line = f"[{ts}] [{device_name}] {direction} '{cleaned_text}'\n"
@@ -194,36 +280,47 @@ class SessionLogger:
         handle.write(line)
         handle.flush()
 
+        if direction == OUTGOING:
+            self.last_outgoing[port] = (cleaned_text, datetime.datetime.now().timestamp())
+
     def _detect_device_name(self, port: int, direction: str, text: str):
         """Extract device hostname from router prompts."""
-        if direction != "←":
+        if direction != INCOMING:
             return
-            
-        import re
-        
-        # Look for common router prompt patterns
+
         patterns = [
-            r'<([^>\-\s]+(?:-[^>\s]+)?)>',     # <R1>, <Router-1>
-            r'\[([^\]\-\s]+(?:-[^\]\s]+)?)\]', # [R1], [Router-1] 
-            r'^([A-Za-z][A-Za-z0-9\-_]*)[#>]' # R1#, R1>
+            r"<([^>\-\s]+(?:-[^>\s]+)?)>",      # <R1>, <Router-1>
+            r"\[([^\]\-\s]+(?:-[^\]\s]+)?)\]",  # [R1], [Router-1]
+            r"^([A-Za-z][A-Za-z0-9\-_]*)[#>]",  # R1#, R1>
         ]
-        
+
         for pattern in patterns:
             matches = re.findall(pattern, text.strip())
-            if matches:
-                hostname = matches[0].strip()
-                # Skip common system words
-                excluded = ['huawei', 'system', 'config', 'user', 'info', 
-                           'warning', 'error', 'debug', 'display', 'show']
-                
-                if hostname and hostname.lower() not in excluded:
-                    if (port not in self.device_names or 
-                        len(hostname) > len(self.device_names[port])):
-                        old_name = self.device_names.get(port, f"device_{port}")
-                        self.device_names[port] = hostname
-                        if old_name != hostname:
-                            logger.info(f"Port {port} device name: {hostname}")
-                    break
+            if not matches:
+                continue
+
+            hostname = matches[0].strip()
+            excluded = [
+                "huawei",
+                "system",
+                "config",
+                "user",
+                "info",
+                "warning",
+                "error",
+                "debug",
+                "display",
+                "show",
+            ]
+            if not hostname or hostname.lower() in excluded:
+                continue
+
+            if port not in self.device_names or len(hostname) > len(self.device_names[port]):
+                old_name = self.device_names.get(port, f"device_{port}")
+                self.device_names[port] = hostname
+                if old_name != hostname:
+                    logger.info(f"Port {port} device name: {hostname}")
+            break
 
     def close(self):
         """Close all log files and clean up resources."""
@@ -236,21 +333,23 @@ class SessionLogger:
         self.files.clear()
         self.last_lines.clear()
         self.duplicate_prompt_count.clear()
+        self.telnet_states.clear()
+        self.last_outgoing.clear()
 
 
 class ENSPPacketSniffer:
-    """Packet sniffer for eNSP console sessions."""
-    
+    """Packet sniffer for eNSP console sessions with TCP stream reassembly."""
+
     def __init__(
         self,
         console_ports: Set[int],
         log_dir: Path,
         loopback_iface: str = "Npcap Loopback Adapter",
-        auto_detect: bool = True
+        auto_detect: bool = True,
     ):
         if not SCAPY_AVAILABLE:
             raise ImportError("scapy is not installed. Install with: pip install scapy>=2.5.0")
-        
+
         self.console_ports = console_ports
         self.log_dir = log_dir
         self.loopback_iface = loopback_iface
@@ -258,7 +357,8 @@ class ENSPPacketSniffer:
         self.session_logger: Optional[SessionLogger] = None
         self.sniffer: Optional[AsyncSniffer] = None
         self._running = False
-        
+        self._streams: Dict[Tuple[int, int, int, str], TcpStreamState] = {}
+
     def _build_bpf_filter(self) -> str:
         if self.auto_detect:
             if self.console_ports:
@@ -266,21 +366,101 @@ class ENSPPacketSniffer:
                 max_port = max(self.console_ports)
                 return f"tcp and (portrange {min_port}-{max_port})"
             return "tcp and (portrange 2000-2010)"
-        else:
-            if not self.console_ports:
-                return "tcp and (portrange 2000-2010)"
-            parts = [f"port {p}" for p in sorted(self.console_ports)]
-            return "tcp and (" + " or ".join(parts) + ")"
-    
+
+        if not self.console_ports:
+            return "tcp and (portrange 2000-2010)"
+        parts = [f"port {p}" for p in sorted(self.console_ports)]
+        return "tcp and (" + " or ".join(parts) + ")"
+
     def _resolve_iface(self, preferred: str) -> str:
         ifaces = get_if_list()
         if preferred in ifaces:
             return preferred
-        for i in ifaces:
-            if "loopback" in i.lower():
-                return i
+        for iface in ifaces:
+            if "loopback" in iface.lower():
+                return iface
         raise ValueError(f"Interface '{preferred}' not found. Available: {', '.join(ifaces)}")
-    
+
+    def _consume_pending(self, state: TcpStreamState) -> bytes:
+        emitted = bytearray()
+        if state.next_seq is None:
+            return bytes(emitted)
+
+        while state.pending:
+            best_seq = None
+            best_payload = b""
+            for seq, payload in state.pending.items():
+                end_seq = seq + len(payload)
+                if seq <= state.next_seq < end_seq:
+                    if best_seq is None or seq < best_seq:
+                        best_seq = seq
+                        best_payload = payload
+
+            if best_seq is None:
+                break
+
+            state.pending.pop(best_seq)
+            offset = state.next_seq - best_seq
+            tail = best_payload[offset:]
+            if not tail:
+                continue
+
+            emitted.extend(tail)
+            state.next_seq += len(tail)
+
+        return bytes(emitted)
+
+    def _reassemble_payload(self, stream_key: Tuple[int, int, int, str], seq: int, payload: bytes) -> bytes:
+        """
+        Return only new contiguous bytes for this stream direction.
+
+        Handles retransmits/overlap and short out-of-order windows.
+        """
+        if not payload:
+            return b""
+
+        state = self._streams.setdefault(stream_key, TcpStreamState())
+        state.last_seen = datetime.datetime.now().timestamp()
+
+        if state.next_seq is None:
+            state.next_seq = seq
+
+        end_seq = seq + len(payload)
+        if state.next_seq is not None and end_seq <= state.next_seq:
+            return b""
+
+        if state.next_seq is not None and seq < state.next_seq:
+            payload = payload[state.next_seq - seq :]
+            seq = state.next_seq
+            if not payload:
+                return b""
+
+        if state.next_seq is not None and seq > state.next_seq:
+            # If we have a large/long gap, resync to avoid stalling.
+            if state.gap_since is None:
+                state.gap_since = state.last_seen
+            gap_bytes = seq - state.next_seq
+            gap_age = state.last_seen - (state.gap_since or state.last_seen)
+            if gap_bytes >= MAX_GAP_BYTES or gap_age >= GAP_TIMEOUT_SEC:
+                state.next_seq = seq
+                state.pending.clear()
+                state.gap_since = None
+            else:
+                current = state.pending.get(seq)
+                if current is None or len(payload) > len(current):
+                    state.pending[seq] = payload
+                if len(state.pending) > 256:
+                    oldest = min(state.pending)
+                    state.pending.pop(oldest, None)
+                return b""
+
+        emitted = bytearray(payload)
+        if state.next_seq is not None:
+            state.next_seq += len(payload)
+            state.gap_since = None
+        emitted.extend(self._consume_pending(state))
+        return bytes(emitted)
+
     def _on_packet(self, pkt):
         try:
             if not pkt.haslayer(Raw):
@@ -288,6 +468,7 @@ class ENSPPacketSniffer:
             tcp = pkt.getlayer("TCP")
             if tcp is None:
                 return
+
             sport = int(tcp.sport)
             dport = int(tcp.dport)
 
@@ -295,60 +476,66 @@ class ENSPPacketSniffer:
             direction = None
             if dport in self.console_ports:
                 port = dport
-                direction = "→"
+                direction = OUTGOING
             elif sport in self.console_ports:
                 port = sport
-                direction = "←"
-            if port is None:
+                direction = INCOMING
+            if port is None or direction is None:
                 return
 
-            payload = bytes(pkt[Raw].load)
-            if self.session_logger:
+            raw_payload = bytes(pkt[Raw].load)
+            if not raw_payload:
+                return
+
+            stream_key = (port, sport, dport, direction)
+            seq = int(getattr(tcp, "seq", 0))
+            payload = self._reassemble_payload(stream_key, seq, raw_payload)
+            if payload and self.session_logger:
                 self.session_logger.write(port, direction, payload)
         except Exception as exc:
             logger.error(f"Error processing packet: {exc}")
-    
+
     def start(self):
         if self._running:
             logger.warning("Packet sniffer already running")
             return
-        
+
         if not self.console_ports and not self.auto_detect:
             logger.error("No console ports configured and auto-detect disabled")
             raise ValueError("No console ports configured and auto-detect disabled")
-        
+
         try:
             iface = self._resolve_iface(self.loopback_iface)
             bpf_filter = self._build_bpf_filter()
-            
-            logger.info(f"Starting eNSP packet sniffer")
+
+            logger.info("Starting eNSP packet sniffer")
             logger.info(f"Interface: {iface}")
             logger.info(f"Ports: {sorted(self.console_ports) if self.console_ports else 'auto-detect'}")
             logger.info(f"BPF filter: {bpf_filter}")
             logger.info(f"Log directory: {self.log_dir.resolve()}")
-            
+
             self.session_logger = SessionLogger(self.log_dir)
-            
+            self._streams.clear()
+
             self.sniffer = AsyncSniffer(
                 iface=iface,
                 filter=bpf_filter,
                 prn=self._on_packet,
                 store=False,
             )
-            
+
             self.sniffer.start()
             self._running = True
             logger.info("Packet sniffer started successfully")
-            
         except Exception as exc:
             logger.error(f"Failed to start packet sniffer: {exc}")
             self._running = False
             raise
-    
+
     def stop(self):
         if not self._running:
             return
-        
+
         logger.info("Stopping packet sniffer...")
         try:
             if self.sniffer:
@@ -356,17 +543,18 @@ class ENSPPacketSniffer:
                 self.sniffer = None
         except Exception as exc:
             logger.error(f"Error stopping sniffer: {exc}")
-        
+
         try:
             if self.session_logger:
                 self.session_logger.close()
                 self.session_logger = None
         except Exception as exc:
             logger.error(f"Error closing session logger: {exc}")
-        
+
+        self._streams.clear()
         self._running = False
         logger.info("Packet sniffer stopped")
-    
+
     @property
     def is_running(self) -> bool:
         return self._running
