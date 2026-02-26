@@ -355,7 +355,9 @@ class ENSPPacketSniffer:
         self.session_logger: Optional[SessionLogger] = None
         self.sniffer: Optional[AsyncSniffer] = None
         self._running = False
-        self._streams: Dict[Tuple[int, int, int, str], TcpStreamState] = {}
+        # Simple per-direction seq tracking for loopback dedup
+        # Key: (port, direction), Value: highest seq end seen
+        self._seq_tracker: Dict[Tuple[int, str], int] = {}
 
     def _build_bpf_filter(self) -> str:
         if self.auto_detect:
@@ -500,9 +502,25 @@ class ENSPPacketSniffer:
             if not raw_payload:
                 return
 
-            # Pass raw payload directly to the session logger.
-            # TCP reassembly is skipped — on loopback, packets arrive in order
-            # and the reassembly logic was silently dropping response data.
+            # Lightweight dedup: Npcap on loopback captures each packet twice.
+            # Track the highest sequence-end per (port, direction) and skip
+            # data we've already seen.
+            seq = int(getattr(tcp, "seq", 0))
+            payload_len = len(raw_payload)
+            end_seq = seq + payload_len
+            stream_key = (port, direction)
+
+            if stream_key in self._seq_tracker:
+                last_end = self._seq_tracker[stream_key]
+                if end_seq <= last_end:
+                    # Entire packet already processed (duplicate)
+                    return
+                if seq < last_end:
+                    # Partial overlap — trim already-seen bytes
+                    raw_payload = raw_payload[last_end - seq:]
+
+            self._seq_tracker[stream_key] = end_seq
+
             if self.session_logger:
                 self.session_logger.write(port, direction, raw_payload)
         except Exception as exc:
