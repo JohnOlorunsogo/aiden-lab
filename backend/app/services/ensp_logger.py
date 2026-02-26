@@ -366,9 +366,8 @@ class ENSPPacketSniffer:
         self.session_logger: Optional[SessionLogger] = None
         self.sniffer: Optional[AsyncSniffer] = None
         self._running = False
-        # Exact-packet dedup: track (seq, payload_len) pairs to skip only
-        # identical loopback copies — never trim partial overlaps.
-        self._seen_packets: Dict[Tuple[int, str], Set[Tuple[int, int]]] = {}
+        # Content-based dedup: track payload hashes with timestamps
+        self._seen_packets: Dict[Tuple[int, str], Dict[int, float]] = {}
 
     def _build_bpf_filter(self) -> str:
         if self.auto_detect:
@@ -513,27 +512,28 @@ class ENSPPacketSniffer:
             if not raw_payload:
                 return
 
-            seq = int(getattr(tcp, "seq", 0))
-            pkt_id = (seq, len(raw_payload))
+            # Content-based dedup: Npcap on Windows loopback captures each
+            # packet from TWO separate TCP flows with different seq numbers,
+            # so seq-based dedup cannot work.  Instead, skip packets whose
+            # payload content we've already processed recently.
             stream_key = (port, direction)
+            payload_hash = hash(raw_payload)
 
-            # Log EVERY packet before dedup — see ALL data Npcap captures
-            logger.info(
-                f"[PKT] seq={seq} len={len(raw_payload)} "
-                f"port={port} dir={direction} "
-                f"data={raw_payload[:80]!r}"
-            )
+            now = datetime.datetime.now().timestamp()
+            seen = self._seen_packets.setdefault(stream_key, {})
 
-            # Exact-packet dedup: skip packets with same (seq, len)
-            seen = self._seen_packets.setdefault(stream_key, set())
-            if pkt_id in seen:
-                logger.info(f"[PKT-SKIP] seq={seq} len={len(raw_payload)} (duplicate)")
-                return  # Exact duplicate
-            seen.add(pkt_id)
+            if payload_hash in seen:
+                # Skip if we saw the same content within the last 0.5s
+                if now - seen[payload_hash] < 0.5:
+                    return
+            seen[payload_hash] = now
 
-            # Keep the set bounded
-            if len(seen) > 512:
-                self._seen_packets[stream_key] = set()
+            # Prune old entries (older than 2 seconds)
+            if len(seen) > 200:
+                cutoff = now - 2.0
+                self._seen_packets[stream_key] = {
+                    k: v for k, v in seen.items() if v > cutoff
+                }
 
             if self.session_logger:
                 self.session_logger.write(port, direction, raw_payload)
