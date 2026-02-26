@@ -219,19 +219,25 @@ class SessionLogger:
         buffers: Dict[int, str] = getattr(self, buffer_name)
         buffers[port] = buffers.get(port, "") + text
 
-        while "\n" in buffers[port] or "\r" in buffers[port]:
-            buf = buffers[port]
-            pos_n = buf.find("\n")
-            pos_r = buf.find("\r")
-            if pos_n == -1:
-                split_at = pos_r
-            elif pos_r == -1:
-                split_at = pos_n
-            else:
-                split_at = min(pos_n, pos_r)
+        # Normalize \r\n → \n, then handle bare \r as terminal carriage return
+        # (overwrites from beginning of current line)
+        buffers[port] = buffers[port].replace("\r\n", "\n")
 
-            line = buf[: split_at + 1]
-            buffers[port] = buf[split_at + 1 :]
+        # Apply bare \r: replace content before \r with content after \r
+        # This handles VRP's cursor-return behavior (e.g. "        ^\rError: ...")
+        while "\r" in buffers[port]:
+            pos = buffers[port].find("\r")
+            # Find the start of the current line (last \n before \r)
+            line_start = buffers[port].rfind("\n", 0, pos)
+            line_start = line_start + 1 if line_start != -1 else 0
+            # Remove from line_start to \r (the old content gets overwritten)
+            buffers[port] = buffers[port][:line_start] + buffers[port][pos + 1:]
+
+        # Split on \n to extract complete lines
+        while "\n" in buffers[port]:
+            pos = buffers[port].find("\n")
+            line = buffers[port][:pos]
+            buffers[port] = buffers[port][pos + 1:]
             if line.strip():
                 self._log_line(port, direction, line)
 
