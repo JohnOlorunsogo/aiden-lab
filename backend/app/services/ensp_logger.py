@@ -513,22 +513,26 @@ class ENSPPacketSniffer:
             if not raw_payload:
                 return
 
-            # Exact-packet dedup: Npcap on loopback captures each packet
-            # twice (identical copies).  Skip packets we've already seen
-            # (same seq + same length), but NEVER trim partial overlaps —
-            # that corrupts data when Npcap fragments differ from TCP segments.
             seq = int(getattr(tcp, "seq", 0))
             pkt_id = (seq, len(raw_payload))
             stream_key = (port, direction)
 
+            # Log EVERY packet before dedup — see ALL data Npcap captures
+            logger.info(
+                f"[PKT] seq={seq} len={len(raw_payload)} "
+                f"port={port} dir={direction} "
+                f"data={raw_payload[:80]!r}"
+            )
+
+            # Exact-packet dedup: skip packets with same (seq, len)
             seen = self._seen_packets.setdefault(stream_key, set())
             if pkt_id in seen:
+                logger.info(f"[PKT-SKIP] seq={seq} len={len(raw_payload)} (duplicate)")
                 return  # Exact duplicate
             seen.add(pkt_id)
 
-            # Keep the set bounded (retain last ~512 entries per stream)
+            # Keep the set bounded
             if len(seen) > 512:
-                # Remove oldest entries by clearing and keeping recent
                 self._seen_packets[stream_key] = set()
 
             if self.session_logger:
