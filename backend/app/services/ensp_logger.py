@@ -419,7 +419,7 @@ class ENSPPacketSniffer:
         if not payload:
             return b""
 
-        state = self._streams.setdefault(stream_key, TcpStreamState())
+        state = self._seq_tracker.setdefault(stream_key, TcpStreamState())
         state.last_seen = datetime.datetime.now().timestamp()
 
         if state.next_seq is None:
@@ -546,7 +546,7 @@ class ENSPPacketSniffer:
             logger.info(f"Log directory: {self.log_dir.resolve()}")
 
             self.session_logger = SessionLogger(self.log_dir)
-            self._streams.clear()
+            self._seq_tracker.clear()
 
             self.sniffer = AsyncSniffer(
                 iface=iface,
@@ -582,7 +582,7 @@ class ENSPPacketSniffer:
         except Exception as exc:
             logger.error(f"Error closing session logger: {exc}")
 
-        self._streams.clear()
+        self._seq_tracker.clear()
         self._running = False
         logger.info("Packet sniffer stopped")
 

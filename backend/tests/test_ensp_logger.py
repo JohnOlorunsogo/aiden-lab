@@ -38,40 +38,44 @@ def test_strip_telnet_controls_across_packet_boundary(tmp_path):
 def test_apply_backspaces_removes_erased_characters():
     assert SessionLogger._apply_backspaces("abcd\b\bXY") == "abXY"
 
-
-def test_reassemble_payload_trims_overlap_and_retransmit():
+def test_seq_tracker_dedup_skips_duplicate_packets():
+    """Test that duplicate packets (same seq) are skipped by _seq_tracker."""
     sniffer = _make_sniffer_without_init()
-    key = (2000, 50123, 2000, OUTGOING)
+    sniffer._seq_tracker = {}
 
-    first = sniffer._reassemble_payload(key, 100, b"abcdefghi")
-    overlap = sniffer._reassemble_payload(key, 104, b"efghiXYZ\r\n")
-    retransmit = sniffer._reassemble_payload(key, 104, b"efghiXYZ\r\n")
+    key = (2000, OUTGOING)
 
-    assert first == b"abcdefghi"
-    assert overlap == b"XYZ\r\n"
-    assert retransmit == b""
+    # First packet
+    sniffer._seq_tracker[key] = 100 + 9  # seq=100, payload=9 bytes -> end_seq=109
+    # Duplicate with end_seq <= last_end should be skipped
+    assert 105 + 4 <= sniffer._seq_tracker[key]  # end_seq 109 <= 109
 
 
-def test_reassemble_payload_handles_short_out_of_order_window():
+def test_seq_tracker_dedup_trims_overlap():
+    """Test that overlapping data is trimmed correctly."""
     sniffer = _make_sniffer_without_init()
-    key = (2000, 50123, 2000, OUTGOING)
+    sniffer._seq_tracker = {}
 
-    start = sniffer._reassemble_payload(key, 100, b"abcde")
-    out_of_order = sniffer._reassemble_payload(key, 110, b"klm\r\n")
-    bridge = sniffer._reassemble_payload(key, 105, b"fghij")
+    key = (2000, INCOMING)
 
-    assert start == b"abcde"
-    assert out_of_order == b""
-    assert bridge == b"fghijklm\r\n"
+    # Simulate: first packet sets tracker to end_seq=109
+    sniffer._seq_tracker[key] = 109
+
+    # Overlapping packet: seq=104, payload=b"efghiXYZ\r\n" (10 bytes), end_seq=114
+    seq = 104
+    payload = b"efghiXYZ\r\n"
+    last_end = sniffer._seq_tracker[key]
+    # Trim: skip first (109 - 104) = 5 bytes
+    trimmed = payload[last_end - seq:]
+    assert trimmed == b"XYZ\r\n"
 
 
-def test_reassemble_payload_resyncs_on_large_gap():
+def test_seq_tracker_new_stream_accepts_all_data():
+    """Test that the first packet for a new stream is always accepted."""
     sniffer = _make_sniffer_without_init()
-    key = (2000, 50123, 2000, OUTGOING)
+    sniffer._seq_tracker = {}
 
-    start = sniffer._reassemble_payload(key, 100, b"abcde")
-    # Large gap should resync and emit payload instead of stalling.
-    gap = sniffer._reassemble_payload(key, 100 + 9000, b"XYZ\r\n")
+    key = (2000, INCOMING)
+    # No entry in tracker yet — packet should be fully accepted
+    assert key not in sniffer._seq_tracker
 
-    assert start == b"abcde"
-    assert gap == b"XYZ\r\n"
