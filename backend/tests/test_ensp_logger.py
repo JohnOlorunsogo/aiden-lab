@@ -5,7 +5,7 @@ from app.services.ensp_logger import ENSPPacketSniffer, INCOMING, OUTGOING, Sess
 
 def _make_sniffer_without_init() -> ENSPPacketSniffer:
     sniffer = object.__new__(ENSPPacketSniffer)
-    sniffer._streams = {}
+    sniffer._seq_tracker = {}
     return sniffer
 
 
@@ -24,12 +24,16 @@ def test_strip_telnet_controls_negotiation_and_subnegotiation(tmp_path):
     assert cleaned == b"<Huawei>\r\n"
 
 
-def test_strip_telnet_controls_across_packet_boundary(tmp_path):
+def test_strip_telnet_controls_stateless_no_data_loss(tmp_path):
+    """Stateless stripping: a trailing IAC in packet 1 must NOT eat
+    bytes from packet 2.  This was the old bug."""
     logger = SessionLogger(tmp_path)
     key = (2000, INCOMING)
 
+    # Packet 1 ends with a lone IAC — should be discarded, not carried
     chunk1 = b"hello\xff"
-    chunk2 = b"\xfd\x18world"
+    # Packet 2 starts with normal text — should NOT be eaten
+    chunk2 = b"world"
 
     assert logger._strip_telnet_controls(key, chunk1) == b"hello"
     assert logger._strip_telnet_controls(key, chunk2) == b"world"

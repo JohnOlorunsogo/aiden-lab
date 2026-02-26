@@ -87,47 +87,53 @@ class SessionLogger:
             raise
 
     def _strip_telnet_controls(self, key: Tuple[int, str], data: bytes) -> bytes:
-        """Parse Telnet IAC control sequences and emit printable payload bytes only."""
-        state = self.telnet_states.setdefault(key, TelnetDecodeState())
+        """Strip Telnet IAC control sequences from raw data.
+        
+        Uses a stateless per-packet approach — processes each packet
+        independently to avoid eating data bytes when IAC state carries
+        across packet boundaries.
+        """
         out = bytearray()
         i = 0
+        n = len(data)
 
-        while i < len(data):
+        while i < n:
             b = data[i]
 
-            if state.in_subnegotiation:
-                if state.subnegotiation_iac:
-                    if b == TELNET_SE:
-                        state.in_subnegotiation = False
-                    state.subnegotiation_iac = False
-                    i += 1
-                    continue
-                if b == TELNET_IAC:
-                    state.subnegotiation_iac = True
-                i += 1
-                continue
+            if b == TELNET_IAC and i + 1 < n:
+                cmd = data[i + 1]
 
-            if state.pending_option_for is not None:
-                # Consume option byte for IAC WILL/WONT/DO/DONT/SB.
-                if state.pending_option_for == TELNET_SB:
-                    state.in_subnegotiation = True
-                    state.subnegotiation_iac = False
-                state.pending_option_for = None
-                i += 1
-                continue
-
-            if state.pending_iac:
-                state.pending_iac = False
-                if b == TELNET_IAC:
+                if cmd == TELNET_IAC:
+                    # Escaped 255 — emit one literal 255
                     out.append(TELNET_IAC)
-                elif b in (TELNET_WILL, TELNET_WONT, TELNET_DO, TELNET_DONT, TELNET_SB):
-                    state.pending_option_for = b
-                # Other IAC commands are intentionally ignored.
-                i += 1
+                    i += 2
+                    continue
+
+                if cmd in (TELNET_WILL, TELNET_WONT, TELNET_DO, TELNET_DONT):
+                    # 3-byte command: IAC CMD OPTION
+                    i += 3
+                    continue
+
+                if cmd == TELNET_SB:
+                    # Subnegotiation: IAC SB ... IAC SE
+                    j = i + 2
+                    while j < n - 1:
+                        if data[j] == TELNET_IAC and data[j + 1] == TELNET_SE:
+                            j += 2
+                            break
+                        j += 1
+                    else:
+                        # Subneg not terminated in this packet — skip to end
+                        j = n
+                    i = j
+                    continue
+
+                # Other 2-byte IAC command (e.g. IAC NOP, IAC GA)
+                i += 2
                 continue
 
-            if b == TELNET_IAC:
-                state.pending_iac = True
+            if b == TELNET_IAC and i + 1 == n:
+                # Lone IAC at end of packet — discard (don't carry state)
                 i += 1
                 continue
 
