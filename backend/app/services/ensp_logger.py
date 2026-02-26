@@ -219,19 +219,12 @@ class SessionLogger:
         buffers: Dict[int, str] = getattr(self, buffer_name)
         buffers[port] = buffers.get(port, "") + text
 
-        # Normalize \r\n → \n, then handle bare \r as terminal carriage return
-        # (overwrites from beginning of current line)
-        buffers[port] = buffers[port].replace("\r\n", "\n")
-
-        # Apply bare \r: replace content before \r with content after \r
-        # This handles VRP's cursor-return behavior (e.g. "        ^\rError: ...")
-        while "\r" in buffers[port]:
-            pos = buffers[port].find("\r")
-            # Find the start of the current line (last \n before \r)
-            line_start = buffers[port].rfind("\n", 0, pos)
-            line_start = line_start + 1 if line_start != -1 else 0
-            # Remove from line_start to \r (the old content gets overwritten)
-            buffers[port] = buffers[port][:line_start] + buffers[port][pos + 1:]
+        # Normalize line endings: \r\n → \n, then strip any remaining bare \r.
+        # VRP uses \r\n for line endings and bare \r for cursor return (to
+        # overwrite the caret indicator). For logging we just want the final
+        # visible text, so stripping \r is the safest approach — it avoids
+        # data loss when \r\n is split across TCP packets.
+        buffers[port] = buffers[port].replace("\r\n", "\n").replace("\r", "")
 
         # Split on \n to extract complete lines
         while "\n" in buffers[port]:
