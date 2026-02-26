@@ -1,11 +1,11 @@
-"""Tests for ENSP packet logger stream cleanup and reassembly."""
+"""Tests for ENSP packet logger stream cleanup and deduplication."""
 
 from app.services.ensp_logger import ENSPPacketSniffer, INCOMING, OUTGOING, SessionLogger
 
 
 def _make_sniffer_without_init() -> ENSPPacketSniffer:
     sniffer = object.__new__(ENSPPacketSniffer)
-    sniffer._seq_tracker = {}
+    sniffer._seen_packets = {}
     return sniffer
 
 
@@ -30,9 +30,7 @@ def test_strip_telnet_controls_stateless_no_data_loss(tmp_path):
     logger = SessionLogger(tmp_path)
     key = (2000, INCOMING)
 
-    # Packet 1 ends with a lone IAC — should be discarded, not carried
     chunk1 = b"hello\xff"
-    # Packet 2 starts with normal text — should NOT be eaten
     chunk2 = b"world"
 
     assert logger._strip_telnet_controls(key, chunk1) == b"hello"
@@ -42,44 +40,31 @@ def test_strip_telnet_controls_stateless_no_data_loss(tmp_path):
 def test_apply_backspaces_removes_erased_characters():
     assert SessionLogger._apply_backspaces("abcd\b\bXY") == "abXY"
 
-def test_seq_tracker_dedup_skips_duplicate_packets():
-    """Test that duplicate packets (same seq) are skipped by _seq_tracker."""
+
+def test_exact_dedup_skips_identical_packets():
+    """Packets with same (seq, len) are skipped as loopback duplicates."""
     sniffer = _make_sniffer_without_init()
-    sniffer._seq_tracker = {}
-
-    key = (2000, OUTGOING)
-
-    # First packet
-    sniffer._seq_tracker[key] = 100 + 9  # seq=100, payload=9 bytes -> end_seq=109
-    # Duplicate with end_seq <= last_end should be skipped
-    assert 105 + 4 <= sniffer._seq_tracker[key]  # end_seq 109 <= 109
-
-
-def test_seq_tracker_dedup_trims_overlap():
-    """Test that overlapping data is trimmed correctly."""
-    sniffer = _make_sniffer_without_init()
-    sniffer._seq_tracker = {}
-
     key = (2000, INCOMING)
+    seen = sniffer._seen_packets.setdefault(key, set())
 
-    # Simulate: first packet sets tracker to end_seq=109
-    sniffer._seq_tracker[key] = 109
+    pkt_id = (100, 9)  # seq=100, 9 bytes
+    seen.add(pkt_id)
 
-    # Overlapping packet: seq=104, payload=b"efghiXYZ\r\n" (10 bytes), end_seq=114
-    seq = 104
-    payload = b"efghiXYZ\r\n"
-    last_end = sniffer._seq_tracker[key]
-    # Trim: skip first (109 - 104) = 5 bytes
-    trimmed = payload[last_end - seq:]
-    assert trimmed == b"XYZ\r\n"
+    # Same (seq, len) should be detected as duplicate
+    assert pkt_id in seen
 
 
-def test_seq_tracker_new_stream_accepts_all_data():
-    """Test that the first packet for a new stream is always accepted."""
+def test_exact_dedup_accepts_different_sized_packets():
+    """Packets with same seq but different length must NOT be skipped.
+    This prevents data loss from Npcap capturing at different fragmentation."""
     sniffer = _make_sniffer_without_init()
-    sniffer._seq_tracker = {}
-
     key = (2000, INCOMING)
-    # No entry in tracker yet — packet should be fully accepted
-    assert key not in sniffer._seq_tracker
+    seen = sniffer._seen_packets.setdefault(key, set())
 
+    small_pkt = (100, 9)   # small fragment
+    full_pkt = (100, 63)   # full packet
+
+    seen.add(small_pkt)
+
+    # Different size at same seq must NOT be treated as duplicate
+    assert full_pkt not in seen

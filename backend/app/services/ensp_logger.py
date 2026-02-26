@@ -217,13 +217,13 @@ class SessionLogger:
 
         logger.info(f"[DECODED] port={port} dir={direction} text={text!r}")
 
-        text = self._apply_backspaces(text)
-        if not text:
-            return
-
         buffer_name = "input_buffers" if direction == OUTGOING else "output_buffers"
         buffers: Dict[int, str] = getattr(self, buffer_name)
         buffers[port] = buffers.get(port, "") + text
+
+        # Apply backspaces on the accumulated buffer (not per-packet),
+        # because in Telnet character mode, \b arrives as a separate packet.
+        buffers[port] = self._apply_backspaces(buffers[port])
 
         # Normalize line endings: \r\n → \n, then strip any remaining bare \r.
         # VRP uses \r\n for line endings and bare \r for cursor return (to
@@ -366,9 +366,9 @@ class ENSPPacketSniffer:
         self.session_logger: Optional[SessionLogger] = None
         self.sniffer: Optional[AsyncSniffer] = None
         self._running = False
-        # Simple per-direction seq tracking for loopback dedup
-        # Key: (port, direction), Value: highest seq end seen
-        self._seq_tracker: Dict[Tuple[int, str], int] = {}
+        # Exact-packet dedup: track (seq, payload_len) pairs to skip only
+        # identical loopback copies — never trim partial overlaps.
+        self._seen_packets: Dict[Tuple[int, str], Set[Tuple[int, int]]] = {}
 
     def _build_bpf_filter(self) -> str:
         if self.auto_detect:
@@ -430,7 +430,7 @@ class ENSPPacketSniffer:
         if not payload:
             return b""
 
-        state = self._seq_tracker.setdefault(stream_key, TcpStreamState())
+        state = self._seen_packets.setdefault(stream_key, TcpStreamState())
         state.last_seen = datetime.datetime.now().timestamp()
 
         if state.next_seq is None:
@@ -513,24 +513,23 @@ class ENSPPacketSniffer:
             if not raw_payload:
                 return
 
-            # Lightweight dedup: Npcap on loopback captures each packet twice.
-            # Track the highest sequence-end per (port, direction) and skip
-            # data we've already seen.
+            # Exact-packet dedup: Npcap on loopback captures each packet
+            # twice (identical copies).  Skip packets we've already seen
+            # (same seq + same length), but NEVER trim partial overlaps —
+            # that corrupts data when Npcap fragments differ from TCP segments.
             seq = int(getattr(tcp, "seq", 0))
-            payload_len = len(raw_payload)
-            end_seq = seq + payload_len
+            pkt_id = (seq, len(raw_payload))
             stream_key = (port, direction)
 
-            if stream_key in self._seq_tracker:
-                last_end = self._seq_tracker[stream_key]
-                if end_seq <= last_end:
-                    # Entire packet already processed (duplicate)
-                    return
-                if seq < last_end:
-                    # Partial overlap — trim already-seen bytes
-                    raw_payload = raw_payload[last_end - seq:]
+            seen = self._seen_packets.setdefault(stream_key, set())
+            if pkt_id in seen:
+                return  # Exact duplicate
+            seen.add(pkt_id)
 
-            self._seq_tracker[stream_key] = end_seq
+            # Keep the set bounded (retain last ~512 entries per stream)
+            if len(seen) > 512:
+                # Remove oldest entries by clearing and keeping recent
+                self._seen_packets[stream_key] = set()
 
             if self.session_logger:
                 self.session_logger.write(port, direction, raw_payload)
@@ -557,7 +556,7 @@ class ENSPPacketSniffer:
             logger.info(f"Log directory: {self.log_dir.resolve()}")
 
             self.session_logger = SessionLogger(self.log_dir)
-            self._seq_tracker.clear()
+            self._seen_packets.clear()
 
             self.sniffer = AsyncSniffer(
                 iface=iface,
@@ -593,7 +592,7 @@ class ENSPPacketSniffer:
         except Exception as exc:
             logger.error(f"Error closing session logger: {exc}")
 
-        self._seq_tracker.clear()
+        self._seen_packets.clear()
         self._running = False
         logger.info("Packet sniffer stopped")
 
