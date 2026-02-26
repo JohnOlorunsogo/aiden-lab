@@ -166,33 +166,38 @@ class SessionLogger:
             or s.endswith(">")
         )
 
-    # VRP error fragments: the captured fragment → the missing prefix.
-    # On Windows loopback, VRP sends caret + error as consecutive bytes:
-    #   "        ^ecognized command found at..."
-    # This maps the captured start to the full prefix to reconstruct.
-    _VRP_ERROR_PREFIXES = {
-        "ecognized command":  "Error: Unr",     # Error: Unrecognized command
-        "ncomplete command":  "Error: I",        # Error: Incomplete command
-        "mbiguous command":   "Error: A",        # Error: Ambiguous command
-        "rong parameter":     "Error: W",        # Error: Wrong parameter
-        "oo many parameters": "Error: T",        # Error: Too many parameters
-    }
+    # Known VRP error phrases (the part before "found at '^' position.")
+    _VRP_ERROR_PHRASES = [
+        "Error: Unrecognized command",
+        "Error: Incomplete command",
+        "Error:Incomplete command",   # VRP sometimes omits the space
+        "Error: Ambiguous command",
+        "Error: Wrong parameter",
+        "Error: Too many parameters",
+    ]
 
     @staticmethod
     def _reconstruct_vrp_errors(text: str) -> str:
         """Reconstruct VRP error messages truncated by Npcap loopback capture.
 
         VRP sends the caret indicator and the error message as consecutive
-        bytes on the wire (using terminal cursor positioning for display).
-        The sniffer sees them concatenated, e.g.:
-            '        ^ecognized command found at ...'
-        This method detects known fragments after '^' and inserts the
-        missing line break and error prefix.
+        bytes on the wire. The truncation point varies based on the caret
+        position (number of spaces), so different amounts of the error
+        keyword get cut. This method matches ANY suffix of known VRP error
+        phrases against the text following '^'.
         """
-        for fragment, prefix in SessionLogger._VRP_ERROR_PREFIXES.items():
-            marker = f"^{fragment}"
-            if marker in text:
-                text = text.replace(marker, f"^\n{prefix}{fragment}")
+        for phrase in SessionLogger._VRP_ERROR_PHRASES:
+            # Try every possible suffix of the phrase (longest first)
+            for i in range(1, len(phrase)):
+                suffix = phrase[i:]  # e.g., "ecognized command" or "mplete command"
+                # Match case-insensitive first char (VRP may capitalize differently)
+                marker = f"^{suffix}"
+                marker_lower = f"^{suffix[0].lower()}{suffix[1:]}" if suffix[0].isupper() else marker
+                for m in (marker, marker_lower):
+                    if m in text:
+                        missing_prefix = phrase[:i]  # e.g., "Error: Unr" or "Error:Inco"
+                        text = text.replace(m, f"^\n{missing_prefix}{suffix}")
+                        return text
         return text
 
     @staticmethod
