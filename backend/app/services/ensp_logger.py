@@ -203,6 +203,9 @@ class SessionLogger:
         return "".join(collapsed)
 
     def write(self, port: int, direction: str, data: bytes):
+        # Log raw bytes before ANY processing
+        logger.info(f"[RAW] port={port} dir={direction} bytes={data!r}")
+
         key = (port, direction)
         payload = self._strip_telnet_controls(key, data)
         if not payload:
@@ -211,6 +214,9 @@ class SessionLogger:
         text = payload.decode("utf-8", errors="replace")
         if not text:
             return
+
+        logger.info(f"[DECODED] port={port} dir={direction} text={text!r}")
+
         text = self._apply_backspaces(text)
         if not text:
             return
