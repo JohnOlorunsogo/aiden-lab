@@ -166,6 +166,35 @@ class SessionLogger:
             or s.endswith(">")
         )
 
+    # VRP error fragments: the captured fragment → the missing prefix.
+    # On Windows loopback, VRP sends caret + error as consecutive bytes:
+    #   "        ^ecognized command found at..."
+    # This maps the captured start to the full prefix to reconstruct.
+    _VRP_ERROR_PREFIXES = {
+        "ecognized command":  "Error: Unr",     # Error: Unrecognized command
+        "ncomplete command":  "Error: I",        # Error: Incomplete command
+        "mbiguous command":   "Error: A",        # Error: Ambiguous command
+        "rong parameter":     "Error: W",        # Error: Wrong parameter
+        "oo many parameters": "Error: T",        # Error: Too many parameters
+    }
+
+    @staticmethod
+    def _reconstruct_vrp_errors(text: str) -> str:
+        """Reconstruct VRP error messages truncated by Npcap loopback capture.
+
+        VRP sends the caret indicator and the error message as consecutive
+        bytes on the wire (using terminal cursor positioning for display).
+        The sniffer sees them concatenated, e.g.:
+            '        ^ecognized command found at ...'
+        This method detects known fragments after '^' and inserts the
+        missing line break and error prefix.
+        """
+        for fragment, prefix in SessionLogger._VRP_ERROR_PREFIXES.items():
+            marker = f"^{fragment}"
+            if marker in text:
+                text = text.replace(marker, f"^\n{prefix}{fragment}")
+        return text
+
     @staticmethod
     def _clean_console_text(text: str) -> str:
         """Normalize one logical console line without command-specific rewriting."""
@@ -203,9 +232,6 @@ class SessionLogger:
         return "".join(collapsed)
 
     def write(self, port: int, direction: str, data: bytes):
-        # Log raw bytes before ANY processing
-        logger.info(f"[RAW] port={port} dir={direction} bytes={data!r}")
-
         key = (port, direction)
         payload = self._strip_telnet_controls(key, data)
         if not payload:
@@ -215,8 +241,6 @@ class SessionLogger:
         if not text:
             return
 
-        logger.info(f"[DECODED] port={port} dir={direction} text={text!r}")
-
         buffer_name = "input_buffers" if direction == OUTGOING else "output_buffers"
         buffers: Dict[int, str] = getattr(self, buffer_name)
         buffers[port] = buffers.get(port, "") + text
@@ -225,11 +249,14 @@ class SessionLogger:
         # because in Telnet character mode, \b arrives as a separate packet.
         buffers[port] = self._apply_backspaces(buffers[port])
 
-        # Normalize line endings: \r\n → \n, then strip any remaining bare \r.
-        # VRP uses \r\n for line endings and bare \r for cursor return (to
-        # overwrite the caret indicator). For logging we just want the final
-        # visible text, so stripping \r is the safest approach — it avoids
-        # data loss when \r\n is split across TCP packets.
+        # Reconstruct VRP error messages.
+        # On Windows loopback, Npcap concatenates the caret indicator with
+        # the error text (e.g. "        ^ecognized command found at..."
+        # instead of separate lines). Detect known VRP error fragments
+        # after ^ and insert the missing line break + prefix.
+        buffers[port] = self._reconstruct_vrp_errors(buffers[port])
+
+        # Normalize line endings: \r\n → \n, then strip remaining bare \r.
         buffers[port] = buffers[port].replace("\r\n", "\n").replace("\r", "")
 
         # Split on \n to extract complete lines
