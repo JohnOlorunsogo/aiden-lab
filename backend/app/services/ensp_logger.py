@@ -1,19 +1,24 @@
 """eNSP Console Logger - Passive packet capture using Scapy."""
 import datetime
 import logging
+import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional, Set, Tuple
 
 try:
-    from scapy.all import AsyncSniffer, Raw, get_if_list  # type: ignore
+    from scapy.all import AsyncSniffer, Raw, get_if_list, sniff, IP, IPv6  # type: ignore
     SCAPY_AVAILABLE = True
 except ImportError:
     SCAPY_AVAILABLE = False
     AsyncSniffer = None
     Raw = None
     get_if_list = None
+    sniff = None
+    IP = None
+    IPv6 = None
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,23 @@ CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
 # If capture drops packets, avoid getting stuck waiting forever.
 MAX_GAP_BYTES = 8192
 GAP_TIMEOUT_SEC = 1.0
+RECENT_LINE_TTL_SEC = 0.5
+FORCE_FLUSH_PATTERNS = (
+    "Unrecognized command found at '^' position.",
+    "Error:",
+)
+SERVER_HINT_PATTERNS = (
+    b"Unrecognized command",
+    b"Error:",
+    b"position.",
+    b"<",
+    b"[",
+    b"Username",
+    b"Password",
+    b"login",
+    b"Login",
+    b"^",
+)
 
 
 @dataclass
@@ -44,6 +66,7 @@ class TelnetDecodeState:
     pending_option_for: Optional[int] = None
     in_subnegotiation: bool = False
     subnegotiation_iac: bool = False
+    subnegotiation_len: int = 0
 
 
 @dataclass
@@ -64,18 +87,25 @@ class SessionLogger:
         self.files: Dict[int, Path] = {}
         self.handles: Dict[int, object] = {}
         self.device_names: Dict[int, str] = {}
+        self.file_timestamps: Dict[int, str] = {}
         self.input_buffers: Dict[int, str] = {}
         self.output_buffers: Dict[int, str] = {}
         self.last_lines: Dict[Tuple[int, str], str] = {}
         self.duplicate_prompt_count: Dict[Tuple[int, str], int] = {}
         self.telnet_states: Dict[Tuple[int, str], TelnetDecodeState] = {}
         self.last_outgoing: Dict[int, Tuple[str, float]] = {}
+        self.recent_lines: Dict[Tuple[int, str, str], float] = {}
+        self.debug_port: Optional[int] = None
+        dbg = os.getenv("ENSP_DEBUG_PORT")
+        if dbg and dbg.isdigit():
+            self.debug_port = int(dbg)
 
     def _open(self, port: int):
         if port in self.handles:
             return
         try:
-            ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            ts = self.file_timestamps.get(port) or datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.file_timestamps[port] = ts
             device_name = self.device_names.get(port, f"device_{port}")
             path = self.log_dir / f"{device_name}_{port}_{ts}.log"
             self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -87,53 +117,56 @@ class SessionLogger:
             raise
 
     def _strip_telnet_controls(self, key: Tuple[int, str], data: bytes) -> bytes:
-        """Strip Telnet IAC control sequences from raw data.
-        
-        Uses a stateless per-packet approach — processes each packet
-        independently to avoid eating data bytes when IAC state carries
-        across packet boundaries.
-        """
+        """Parse Telnet IAC control sequences and emit printable payload bytes only."""
+        state = self.telnet_states.setdefault(key, TelnetDecodeState())
         out = bytearray()
         i = 0
-        n = len(data)
 
-        while i < n:
+        while i < len(data):
             b = data[i]
 
-            if b == TELNET_IAC and i + 1 < n:
-                cmd = data[i + 1]
-
-                if cmd == TELNET_IAC:
-                    # Escaped 255 — emit one literal 255
-                    out.append(TELNET_IAC)
-                    i += 2
+            if state.in_subnegotiation:
+                state.subnegotiation_len += 1
+                if state.subnegotiation_len > 512:
+                    # Safety valve: avoid being stuck in subnegotiation if SE was lost.
+                    state.in_subnegotiation = False
+                    state.subnegotiation_iac = False
+                    state.subnegotiation_len = 0
                     continue
-
-                if cmd in (TELNET_WILL, TELNET_WONT, TELNET_DO, TELNET_DONT):
-                    # 3-byte command: IAC CMD OPTION
-                    i += 3
+                if state.subnegotiation_iac:
+                    if b == TELNET_SE:
+                        state.in_subnegotiation = False
+                        state.subnegotiation_len = 0
+                    state.subnegotiation_iac = False
+                    i += 1
                     continue
-
-                if cmd == TELNET_SB:
-                    # Subnegotiation: IAC SB ... IAC SE
-                    j = i + 2
-                    while j < n - 1:
-                        if data[j] == TELNET_IAC and data[j + 1] == TELNET_SE:
-                            j += 2
-                            break
-                        j += 1
-                    else:
-                        # Subneg not terminated in this packet — skip to end
-                        j = n
-                    i = j
-                    continue
-
-                # Other 2-byte IAC command (e.g. IAC NOP, IAC GA)
-                i += 2
+                if b == TELNET_IAC:
+                    state.subnegotiation_iac = True
+                i += 1
                 continue
 
-            if b == TELNET_IAC and i + 1 == n:
-                # Lone IAC at end of packet — discard (don't carry state)
+            if state.pending_option_for is not None:
+                # Consume option byte for IAC WILL/WONT/DO/DONT/SB.
+                if state.pending_option_for == TELNET_SB:
+                    state.in_subnegotiation = True
+                    state.subnegotiation_iac = False
+                    state.subnegotiation_len = 0
+                state.pending_option_for = None
+                i += 1
+                continue
+
+            if state.pending_iac:
+                state.pending_iac = False
+                if b == TELNET_IAC:
+                    out.append(TELNET_IAC)
+                elif b in (TELNET_WILL, TELNET_WONT, TELNET_DO, TELNET_DONT, TELNET_SB):
+                    state.pending_option_for = b
+                # Other IAC commands are intentionally ignored.
+                i += 1
+                continue
+
+            if b == TELNET_IAC:
+                state.pending_iac = True
                 i += 1
                 continue
 
@@ -141,6 +174,30 @@ class SessionLogger:
             i += 1
 
         return bytes(out)
+
+    def _debug_log(self, port: int, reason: str, payload: bytes, text: str, cleaned: str):
+        if self.debug_port is None or port != self.debug_port:
+            return
+        try:
+            path = self.log_dir / f"_debug_{port}.log"
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            line = (
+                f"[{ts}] reason={reason} raw_len={len(payload)} "
+                f"text_len={len(text)} clean_len={len(cleaned)}\n"
+                f"  raw_hex={payload.hex()}\n"
+                f"  text={text!r}\n"
+                f"  clean={cleaned!r}\n"
+            )
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except Exception:
+            pass
+
+    def _debug_payload(self, port: int, reason: str, payload: bytes, text: str, cleaned: str):
+        if self.debug_port is None or port != self.debug_port:
+            return
+        # Only log payloads for incoming direction to keep the file small.
+        self._debug_log(port, reason, payload, text, cleaned)
 
     @staticmethod
     def _apply_backspaces(text: str) -> str:
@@ -166,40 +223,6 @@ class SessionLogger:
             or s.endswith(">")
         )
 
-    # Known VRP error phrases (the part before "found at '^' position.")
-    _VRP_ERROR_PHRASES = [
-        "Error: Unrecognized command",
-        "Error: Incomplete command",
-        "Error:Incomplete command",   # VRP sometimes omits the space
-        "Error: Ambiguous command",
-        "Error: Wrong parameter",
-        "Error: Too many parameters",
-    ]
-
-    @staticmethod
-    def _reconstruct_vrp_errors(text: str) -> str:
-        """Reconstruct VRP error messages truncated by Npcap loopback capture.
-
-        VRP sends the caret indicator and the error message as consecutive
-        bytes on the wire. The truncation point varies based on the caret
-        position (number of spaces), so different amounts of the error
-        keyword get cut. This method matches ANY suffix of known VRP error
-        phrases against the text following '^'.
-        """
-        for phrase in SessionLogger._VRP_ERROR_PHRASES:
-            # Try every possible suffix of the phrase (longest first)
-            for i in range(1, len(phrase)):
-                suffix = phrase[i:]  # e.g., "ecognized command" or "mplete command"
-                # Match case-insensitive first char (VRP may capitalize differently)
-                marker = f"^{suffix}"
-                marker_lower = f"^{suffix[0].lower()}{suffix[1:]}" if suffix[0].isupper() else marker
-                for m in (marker, marker_lower):
-                    if m in text:
-                        missing_prefix = phrase[:i]  # e.g., "Error: Unr" or "Error:Inco"
-                        text = text.replace(m, f"^\n{missing_prefix}{suffix}")
-                        return text
-        return text
-
     @staticmethod
     def _clean_console_text(text: str) -> str:
         """Normalize one logical console line without command-specific rewriting."""
@@ -208,6 +231,34 @@ class SessionLogger:
         cleaned = CONTROL_CHARS_RE.sub("", cleaned)
         cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
         cleaned = cleaned.strip()
+
+        # Fix exact full-line duplication (common with packet overlap artefacts).
+        if len(cleaned) >= 2 and len(cleaned) % 2 == 0:
+            half = len(cleaned) // 2
+            if cleaned[:half] == cleaned[half:]:
+                cleaned = cleaned[:half]
+
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+        # Repair and normalize error lines when capture drops leading bytes
+        # or mixes echoed command text with the error.
+        if "Unrecognized command found at '^' position." in cleaned:
+            if cleaned.startswith("or: "):
+                cleaned = "Error: " + cleaned[4:]
+
+            idx = cleaned.find("Error:")
+            if idx >= 0:
+                cleaned = cleaned[idx:]
+            else:
+                marker = "Unrecognized command found at '^' position."
+                idx = cleaned.find(marker)
+                if idx >= 0:
+                    cleaned = "Error: " + cleaned[idx:]
+
+            cleaned = cleaned.replace("^ Error:", "Error:")
+            if cleaned.startswith("^ "):
+                cleaned = cleaned[2:].lstrip()
+
         return cleaned
 
     @staticmethod
@@ -240,35 +291,50 @@ class SessionLogger:
         key = (port, direction)
         payload = self._strip_telnet_controls(key, data)
         if not payload:
+            self._debug_log(port, "payload_empty_after_telnet_strip", data, "", "")
             return
 
         text = payload.decode("utf-8", errors="replace")
         if not text:
+            self._debug_log(port, "text_empty_after_decode", payload, "", "")
             return
+        text = self._apply_backspaces(text)
+        if not text:
+            self._debug_log(port, "text_empty_after_backspace", payload, "", "")
+            return
+
+        # Create the file early so logs appear as soon as traffic starts.
+        self._open(port)
+
+        if direction == INCOMING:
+            # Trace incoming payloads for the debug port even if they are later filtered.
+            preview_clean = self._clean_console_text(text)
+            self._debug_payload(port, "incoming_payload", payload, text, preview_clean)
 
         buffer_name = "input_buffers" if direction == OUTGOING else "output_buffers"
         buffers: Dict[int, str] = getattr(self, buffer_name)
         buffers[port] = buffers.get(port, "") + text
 
-        # Apply backspaces on the accumulated buffer (not per-packet),
-        # because in Telnet character mode, \b arrives as a separate packet.
-        buffers[port] = self._apply_backspaces(buffers[port])
+        if direction == INCOMING:
+            buf = buffers[port]
+            if any(pat in buf for pat in FORCE_FLUSH_PATTERNS):
+                self._log_line(port, direction, buf)
+                buffers[port] = ""
+                return
 
-        # Reconstruct VRP error messages.
-        # On Windows loopback, Npcap concatenates the caret indicator with
-        # the error text (e.g. "        ^ecognized command found at..."
-        # instead of separate lines). Detect known VRP error fragments
-        # after ^ and insert the missing line break + prefix.
-        buffers[port] = self._reconstruct_vrp_errors(buffers[port])
+        while "\n" in buffers[port] or "\r" in buffers[port]:
+            buf = buffers[port]
+            pos_n = buf.find("\n")
+            pos_r = buf.find("\r")
+            if pos_n == -1:
+                split_at = pos_r
+            elif pos_r == -1:
+                split_at = pos_n
+            else:
+                split_at = min(pos_n, pos_r)
 
-        # Normalize line endings: \r\n → \n, then strip remaining bare \r.
-        buffers[port] = buffers[port].replace("\r\n", "\n").replace("\r", "")
-
-        # Split on \n to extract complete lines
-        while "\n" in buffers[port]:
-            pos = buffers[port].find("\n")
-            line = buffers[port][:pos]
-            buffers[port] = buffers[port][pos + 1:]
+            line = buf[: split_at + 1]
+            buffers[port] = buf[split_at + 1 :]
             if line.strip():
                 self._log_line(port, direction, line)
 
@@ -281,34 +347,44 @@ class SessionLogger:
     def _log_line(self, port: int, direction: str, text: str):
         cleaned_text = self._clean_console_text(text)
         if not cleaned_text or cleaned_text.isspace():
+            self._debug_log(port, "cleaned_empty", b"", text, cleaned_text)
             return
 
         key = (port, direction)
         last_line = self.last_lines.get(key, "")
+        now_ts = datetime.datetime.now().timestamp()
 
-        # Suppress incoming echo lines that are exact matches of the last outgoing command.
-        # Using exact match only — the old _normalize_echo collapsed characters and
-        # could incorrectly suppress legitimate response lines.
-        if direction == INCOMING and len(cleaned_text) <= 64:
+        recent_key = (port, direction, cleaned_text)
+        last_seen = self.recent_lines.get(recent_key)
+        if last_seen is not None and (now_ts - last_seen) <= RECENT_LINE_TTL_SEC:
+            return
+        self.recent_lines[recent_key] = now_ts
+        if len(self.recent_lines) > 2000:
+            self.recent_lines.clear()
+
+        # Suppress incoming echo lines that match recent outgoing commands.
+        # Never suppress error markers or prompts.
+        if (
+            direction == INCOMING
+            and len(cleaned_text) <= 64
+            and "Error:" not in cleaned_text
+            and cleaned_text != "^"
+            and not self._is_prompt_line(cleaned_text)
+        ):
             last_out = self.last_outgoing.get(port)
             if last_out:
                 last_cmd, ts = last_out
                 if (datetime.datetime.now().timestamp() - ts) <= 2.0:
-                    if cleaned_text.strip() == last_cmd.strip():
+                    if self._normalize_echo(cleaned_text) == self._normalize_echo(last_cmd):
+                        self._debug_log(port, "echo_suppressed", b"", text, cleaned_text)
                         return
 
-        # For OUTGOING (commands), suppress exact consecutive duplicates.
-        # For INCOMING (responses), allow everything through — responses may
-        # legitimately repeat (e.g. repeated status lines, table separators).
-        if direction == OUTGOING and cleaned_text == last_line:
-            return
-
-        # For both directions, deduplicate consecutive identical prompts.
-        if self._is_prompt_line(cleaned_text) and cleaned_text == last_line:
+        if cleaned_text == last_line and self._is_prompt_line(cleaned_text):
             self.duplicate_prompt_count[key] = self.duplicate_prompt_count.get(key, 0) + 1
             if self.duplicate_prompt_count[key] > 1:
+                self._debug_log(port, "prompt_dedup", b"", text, cleaned_text)
                 return
-        else:
+        elif cleaned_text != last_line:
             self.duplicate_prompt_count[key] = 0
 
         self.last_lines[key] = cleaned_text
@@ -343,6 +419,7 @@ class SessionLogger:
 
             hostname = matches[0].strip()
             excluded = [
+                "huawei",
                 "system",
                 "config",
                 "user",
@@ -361,7 +438,39 @@ class SessionLogger:
                 self.device_names[port] = hostname
                 if old_name != hostname:
                     logger.info(f"Port {port} device name: {hostname}")
+                    self._rename_log_file(port, old_name, hostname)
             break
+
+    def _rename_log_file(self, port: int, old_name: str, new_name: str):
+        """Rename the current log file when hostname is discovered."""
+        if port not in self.files:
+            return
+        if old_name == new_name:
+            return
+
+        old_path = self.files[port]
+        ts = self.file_timestamps.get(port)
+        if not ts:
+            return
+
+        new_path = old_path.with_name(f"{new_name}_{port}_{ts}.log")
+        if new_path == old_path:
+            return
+
+        try:
+            if port in self.handles:
+                try:
+                    self.handles[port].close()
+                except Exception:
+                    pass
+                self.handles.pop(port, None)
+
+            old_path.rename(new_path)
+            self.files[port] = new_path
+            self.handles[port] = open(new_path, "a", encoding="utf-8")
+            logger.info(f"Renamed log file: {old_path.name} -> {new_path.name}")
+        except Exception as exc:
+            logger.warning(f"Failed to rename log file for port {port}: {exc}")
 
     def close(self):
         """Close all log files and clean up resources."""
@@ -376,6 +485,8 @@ class SessionLogger:
         self.duplicate_prompt_count.clear()
         self.telnet_states.clear()
         self.last_outgoing.clear()
+        self.recent_lines.clear()
+        self.file_timestamps.clear()
 
 
 class ENSPPacketSniffer:
@@ -398,8 +509,14 @@ class ENSPPacketSniffer:
         self.session_logger: Optional[SessionLogger] = None
         self.sniffer: Optional[AsyncSniffer] = None
         self._running = False
-        # Content-based dedup: track payload hashes with timestamps
-        self._seen_packets: Dict[Tuple[int, str], Dict[int, float]] = {}
+        self._streams: Dict[Tuple[int, int, int, str], TcpStreamState] = {}
+        self._conn_server: Dict[Tuple[Tuple[str, int], Tuple[str, int]], Tuple[str, int]] = {}
+        self._bytes_in = 0
+        self._bytes_out = 0
+        self._pkts_in = 0
+        self._pkts_out = 0
+        self._last_stats = time.time()
+        self._port_stats: Dict[int, Dict[str, int]] = {}
 
     def _build_bpf_filter(self) -> str:
         if self.auto_detect:
@@ -416,12 +533,50 @@ class ENSPPacketSniffer:
 
     def _resolve_iface(self, preferred: str) -> str:
         ifaces = get_if_list()
+        if preferred and preferred.lower() == "auto":
+            return self._auto_detect_iface(ifaces)
         if preferred in ifaces:
             return preferred
         for iface in ifaces:
             if "loopback" in iface.lower():
                 return iface
         raise ValueError(f"Interface '{preferred}' not found. Available: {', '.join(ifaces)}")
+
+    def _auto_detect_iface(self, ifaces) -> str:
+        if not sniff:
+            raise ValueError("Auto-detect requires scapy sniff support.")
+        counts: Dict[str, int] = {i: 0 for i in ifaces}
+        logger.info("Auto-detecting capture interface for eNSP console traffic...")
+        for iface in ifaces:
+            try:
+                sniff(
+                    iface=iface,
+                    filter=self._build_bpf_filter(),
+                    timeout=1,
+                    store=False,
+                    prn=lambda _pkt, name=iface: counts.__setitem__(name, counts[name] + 1),
+                )
+            except Exception:
+                continue
+        best_iface = max(counts, key=counts.get)
+        if counts[best_iface] == 0:
+            # No traffic seen during probe window; fall back to loopback if present.
+            for iface in ifaces:
+                if "loopback" in iface.lower():
+                    logger.warning(
+                        "Auto-detect found no traffic on ports %s; falling back to %s",
+                        sorted(self.console_ports),
+                        iface,
+                    )
+                    return iface
+            logger.warning(
+                "Auto-detect found no traffic on ports %s; falling back to %s",
+                sorted(self.console_ports),
+                ifaces[0],
+            )
+            return ifaces[0]
+        logger.info(f"Auto-detect selected interface: {best_iface} (packets={counts[best_iface]})")
+        return best_iface
 
     def _consume_pending(self, state: TcpStreamState) -> bytes:
         emitted = bytearray()
@@ -461,7 +616,7 @@ class ENSPPacketSniffer:
         if not payload:
             return b""
 
-        state = self._seen_packets.setdefault(stream_key, TcpStreamState())
+        state = self._streams.setdefault(stream_key, TcpStreamState())
         state.last_seen = datetime.datetime.now().timestamp()
 
         if state.next_seq is None:
@@ -516,27 +671,53 @@ class ENSPPacketSniffer:
 
             port = None
             direction = None
-            if dport in self.console_ports:
-                port = dport
-                direction = OUTGOING
-            elif sport in self.console_ports:
-                port = sport
-                direction = INCOMING
-            elif self.auto_detect:
-                # Auto-detect: if either port is in the expected range, add it
-                min_p = min(self.console_ports) if self.console_ports else 2000
-                max_p = max(self.console_ports) if self.console_ports else 2020
-                if min_p <= dport <= max_p:
-                    self.console_ports.add(dport)
+            ip = None
+            if IP is not None:
+                ip = pkt.getlayer("IP")
+            if ip is None and IPv6 is not None:
+                ip = pkt.getlayer("IPv6")
+
+            if ip is not None:
+                src_ep = (str(ip.src), sport)
+                dst_ep = (str(ip.dst), dport)
+                conn_key = tuple(sorted([src_ep, dst_ep]))
+
+                flags = int(getattr(tcp, "flags", 0))
+                syn = (flags & 0x02) != 0
+                ack = (flags & 0x10) != 0
+                if syn and not ack:
+                    # Client -> server SYN
+                    if dport in self.console_ports:
+                        self._conn_server[conn_key] = dst_ep
+                elif syn and ack:
+                    # Server -> client SYN-ACK
+                    if sport in self.console_ports:
+                        self._conn_server[conn_key] = src_ep
+
+                server_ep = self._conn_server.get(conn_key)
+                if server_ep is not None:
+                    direction = INCOMING if src_ep == server_ep else OUTGOING
+                    port = server_ep[1]
+                else:
+                    # Heuristic for already-established sessions where we missed SYN/SYN-ACK.
+                    if sport in self.console_ports and dport in self.console_ports:
+                        raw_payload = bytes(pkt[Raw].load)
+                        if any(token in raw_payload for token in SERVER_HINT_PATTERNS):
+                            self._conn_server[conn_key] = src_ep
+                            direction = INCOMING
+                            port = src_ep[1]
+                        else:
+                            self._conn_server[conn_key] = dst_ep
+                            direction = OUTGOING
+                            port = dst_ep[1]
+
+            if direction is None:
+                if dport in self.console_ports:
                     port = dport
                     direction = OUTGOING
-                    logger.info(f"Auto-detected new console port: {dport}")
-                elif min_p <= sport <= max_p:
-                    self.console_ports.add(sport)
+                elif sport in self.console_ports:
                     port = sport
                     direction = INCOMING
-                    logger.info(f"Auto-detected new console port: {sport}")
-
             if port is None or direction is None:
                 return
 
@@ -544,31 +725,45 @@ class ENSPPacketSniffer:
             if not raw_payload:
                 return
 
-            # Content-based dedup: Npcap on Windows loopback captures each
-            # packet from TWO separate TCP flows with different seq numbers,
-            # so seq-based dedup cannot work.  Instead, skip packets whose
-            # payload content we've already processed recently.
-            stream_key = (port, direction)
-            payload_hash = hash(raw_payload)
+            if direction == INCOMING:
+                self._pkts_in += 1
+                self._bytes_in += len(raw_payload)
+            else:
+                self._pkts_out += 1
+                self._bytes_out += len(raw_payload)
 
-            now = datetime.datetime.now().timestamp()
-            seen = self._seen_packets.setdefault(stream_key, {})
+            port_stat = self._port_stats.setdefault(
+                port,
+                {"in_pkts": 0, "in_bytes": 0, "out_pkts": 0, "out_bytes": 0},
+            )
+            if direction == INCOMING:
+                port_stat["in_pkts"] += 1
+                port_stat["in_bytes"] += len(raw_payload)
+            else:
+                port_stat["out_pkts"] += 1
+                port_stat["out_bytes"] += len(raw_payload)
 
-            if payload_hash in seen:
-                # Skip if we saw the same content within the last 0.5s
-                if now - seen[payload_hash] < 0.5:
-                    return
-            seen[payload_hash] = now
+            stream_key = (port, sport, dport, direction)
+            seq = int(getattr(tcp, "seq", 0))
+            payload = self._reassemble_payload(stream_key, seq, raw_payload)
+            if payload and self.session_logger:
+                self.session_logger.write(port, direction, payload)
 
-            # Prune old entries (older than 2 seconds)
-            if len(seen) > 200:
-                cutoff = now - 2.0
-                self._seen_packets[stream_key] = {
-                    k: v for k, v in seen.items() if v > cutoff
-                }
-
-            if self.session_logger:
-                self.session_logger.write(port, direction, raw_payload)
+            now = time.time()
+            if now - self._last_stats >= 5.0:
+                per_port = ", ".join(
+                    f"{p}:in={s['in_pkts']}/{s['in_bytes']} out={s['out_pkts']}/{s['out_bytes']}"
+                    for p, s in sorted(self._port_stats.items())
+                )
+                logger.info(
+                    "Sniffer stats: in=%d pkts/%d bytes, out=%d pkts/%d bytes, per-port: %s",
+                    self._pkts_in,
+                    self._bytes_in,
+                    self._pkts_out,
+                    self._bytes_out,
+                    per_port or "-",
+                )
+                self._last_stats = now
         except Exception as exc:
             logger.error(f"Error processing packet: {exc}")
 
@@ -592,7 +787,13 @@ class ENSPPacketSniffer:
             logger.info(f"Log directory: {self.log_dir.resolve()}")
 
             self.session_logger = SessionLogger(self.log_dir)
-            self._seen_packets.clear()
+            self._streams.clear()
+            self._bytes_in = 0
+            self._bytes_out = 0
+            self._pkts_in = 0
+            self._pkts_out = 0
+            self._last_stats = time.time()
+            self._port_stats.clear()
 
             self.sniffer = AsyncSniffer(
                 iface=iface,
@@ -628,7 +829,7 @@ class ENSPPacketSniffer:
         except Exception as exc:
             logger.error(f"Error closing session logger: {exc}")
 
-        self._seen_packets.clear()
+        self._streams.clear()
         self._running = False
         logger.info("Packet sniffer stopped")
 
